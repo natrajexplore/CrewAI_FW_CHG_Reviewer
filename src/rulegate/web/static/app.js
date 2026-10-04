@@ -1,11 +1,13 @@
-/* RuleGate review console.
+/* RuleGate — Change Review Operations console.
  * Security notes:
- *  - All dynamic content is rendered with DOM APIs and textContent. HTML-parsing sinks are never used, so
- *    change-request text, tool output and LLM output cannot inject markup or script.
+ *  - All dynamic content is rendered with DOM APIs and textContent. HTML-parsing sinks are never
+ *    used, so change-request text, tool output and LLM output cannot inject markup or script.
  *  - The access token lives in sessionStorage (this tab only) and is sent as a Bearer header.
  *    It is read once from the URL fragment, which browsers never send to the server, and then
  *    removed from the address bar.
  *  - No third-party code; the page runs under a strict Content-Security-Policy.
+ * Provenance: every panel and event is labeled DETERMINISTIC (Python), AI-GENERATED (agent),
+ * HUMAN DECISION (reviewer) or ORCHESTRATION (flow).
  */
 (() => {
   "use strict";
@@ -13,40 +15,41 @@
   // ------------------------------------------------------------------ constants
 
   const STEPS = [
-    { id: "intake", label: "Intake", sub: "Parse & validate", kind: "Flow", icon: "inbox" },
-    { id: "analysis", label: "Deterministic analysis", sub: "Shadow · RG-001…016", kind: "Engine", icon: "cpu" },
+    { id: "intake", label: "Intake", sub: "schema validation", kind: "Flow", icon: "inbox" },
+    { id: "analysis", label: "Analysis engine", sub: "shadow · RG-001…016", kind: "Engine", icon: "cpu" },
     { id: "intake_task", label: "Intake Parser", sub: "cr_schema_validator", kind: "Agent", icon: "agent" },
     { id: "rulebase_analysis_task", label: "Rulebase Analyst", sub: "shadow_analyzer · rulebase_lookup", kind: "Agent", icon: "agent" },
     { id: "risk_assessment_task", label: "Risk Assessor", sub: "risk_scanner", kind: "Agent", icon: "agent" },
     { id: "compliance_task", label: "Compliance Auditor", sub: "compliance_kb", kind: "Agent", icon: "agent" },
     { id: "implementation_task", label: "Implementation Planner", sub: "config_renderer", kind: "Agent", icon: "agent" },
     { id: "cab_report_task", label: "CAB Report Writer", sub: "evidence guardrail", kind: "Agent", icon: "agent" },
-    { id: "gate", label: "Approval gate", sub: "Human in the loop", kind: "Human", icon: "shield" },
+    { id: "gate", label: "Approval gate", sub: "accountable reviewer", kind: "Human", icon: "shield" },
     { id: "report", label: "Decision package", sub: "review.md · staged config", kind: "Output", icon: "file" },
   ];
   const AGENT_STEPS = STEPS.filter((s) => s.kind === "Agent").map((s) => s.id);
   const STEP_BY_ID = Object.fromEntries(STEPS.map((s) => [s.id, s]));
+  const STATE_WORD = { pending: "standby", active: "running", done: "complete", skipped: "skipped", failed: "failed", waiting: "awaiting" };
 
   const DECISION_TEXT = {
     APPROVE: "No High or Critical risk. Ready for the CAB queue.",
-    APPROVE_WITH_CONDITIONS: "High-risk findings must be addressed or accepted by a reviewer.",
+    APPROVE_WITH_CONDITIONS: "High-risk findings must be remediated or accepted by a reviewer.",
     REJECT: "Critical findings. Narrow the request before resubmitting.",
-    REJECT_DUPLICATE: "The requested access already exists. No change is needed.",
+    REJECT_DUPLICATE: "The requested access already exists. No change required.",
   };
   const DECISION_LABEL = {
-    APPROVE: "Approve", APPROVE_WITH_CONDITIONS: "Approve with conditions",
-    REJECT: "Reject", REJECT_DUPLICATE: "Reject — duplicate",
+    APPROVE: "Approve", APPROVE_WITH_CONDITIONS: "Approve w/ conditions",
+    REJECT: "Reject", REJECT_DUPLICATE: "Reject · duplicate",
   };
   const SEV_ORDER = ["critical", "high", "medium", "low", "info"];
   const VENDOR_LABEL = { panos: "Palo Alto PAN-OS", ftd: "Cisco FTD (FMC)" };
   const FILTERS = [
     { id: "all", label: "All" },
-    { id: "agents", label: "Agents", kinds: ["task_started", "task_completed", "task_failed", "thinking"] },
-    { id: "tools", label: "Tools", kinds: ["tool_started", "tool_finished", "tool_error"] },
-    { id: "guardrails", label: "Guardrails", kinds: ["guardrail"] },
-    { id: "flow", label: "Flow & gate", kinds: ["intake_started", "analysis_complete", "crew_started", "crew_skipped",
-      "crew_complete", "approval_required", "approval_submitted", "approval_timeout", "report_written", "completed", "failed"] },
+    { id: "det", label: "Deterministic", test: (p) => p === "det" },
+    { id: "ai", label: "AI", test: (p) => p === "ai" },
+    { id: "human", label: "Human", test: (p) => p === "human" },
+    { id: "flow", label: "Flow", test: (p) => p === "flow" },
   ];
+  const PROV_TITLE = { det: "Deterministic", ai: "AI-generated", human: "Human decision", flow: "Orchestration" };
 
   const ICONS = {
     inbox: ["M4 13h4l2 3h4l2-3h4", "M4 13 6.5 5h11L20 13v6H4z"],
@@ -54,18 +57,16 @@
     agent: ["M12 12a4 4 0 1 0 0-8 4 4 0 0 0 0 8z", "M4 21a8 8 0 0 1 16 0"],
     shield: ["M12 2.5 4 5.5v6c0 5 3.4 8.7 8 10 4.6-1.3 8-5 8-10v-6z", "m8.5 12 2.5 2.5 4.5-5"],
     file: ["M14 3H6v18h12V7z", "M14 3v4h4", "M9 13h6M9 17h6"],
-    tool: ["M14.7 6.3a4 4 0 0 0-5.4 5.4L3 18l3 3 6.3-6.3a4 4 0 0 0 5.4-5.4l-2.5 2.5-2.4-.6-.6-2.4z"],
     check: ["m5 12.5 4.5 4.5L19 7.5"],
     x: ["M6 6l12 12M18 6 6 18"],
     alert: ["M12 3 2 20h20z", "M12 10v4M12 17h.01"],
     clock: ["M12 21a9 9 0 1 0 0-18 9 9 0 0 0 0 18z", "M12 7v5l3 2"],
-    brain: ["M9 4a3 3 0 0 0-3 3 3 3 0 0 0-2 5 3 3 0 0 0 2 5 3 3 0 0 0 6 1V5a1 1 0 0 0-3-1z",
-      "M15 4a3 3 0 0 1 3 3 3 3 0 0 1 2 5 3 3 0 0 1-2 5 3 3 0 0 1-6 1"],
-    play: ["M7 4.5v15l12-7.5z"],
     flag: ["M5 21V4h12l-2 4 2 4H5"],
     copy: ["M9 9h11v11H9z", "M5 15H4V4h11v1"],
     download: ["M12 4v11", "m7 10 5 5 5-5", "M5 20h14"],
     lock: ["M5 11h14v10H5z", "M8 11V7a4 4 0 0 1 8 0v4"],
+    list: ["M4 6h16M4 12h16M4 18h10"],
+    chain: ["M10 14a4 4 0 0 0 5.7 0l3-3a4 4 0 0 0-5.7-5.7l-1 1", "M14 10a4 4 0 0 0-5.7 0l-3 3a4 4 0 0 0 5.7 5.7l1-1"],
     dot: ["M12 12h.01"],
   };
 
@@ -112,9 +113,26 @@
     return svg;
   }
 
-  function fmtTime(iso) {
-    try { return new Date(iso).toLocaleTimeString([], { hour: "2-digit", minute: "2-digit", second: "2-digit" }); }
-    catch { return ""; }
+  /** Provenance tag: kind is det | ai | human | flow. */
+  function prov(kind, src) {
+    return h("span", { class: `prov ${kind}`, title: src ? `${PROV_TITLE[kind]}: ${src}` : PROV_TITLE[kind] },
+      PROV_TITLE[kind], src ? h("span", { class: "src", text: `· ${src}` }) : null);
+  }
+
+  const pad = (n) => String(n).padStart(2, "0");
+  function utc(iso) {
+    const d = new Date(iso);
+    if (Number.isNaN(d.getTime())) return "";
+    return `${pad(d.getUTCHours())}:${pad(d.getUTCMinutes())}:${pad(d.getUTCSeconds())}Z`;
+  }
+  function utcFull(iso) {
+    const d = new Date(iso);
+    if (Number.isNaN(d.getTime())) return "";
+    return `${d.getUTCFullYear()}-${pad(d.getUTCMonth() + 1)}-${pad(d.getUTCDate())} ${utc(iso)}`;
+  }
+  function duration(ms) {
+    const s = Math.max(0, Math.round(ms / 1000));
+    return `${pad(Math.floor(s / 60))}:${pad(s % 60)}`;
   }
 
   function decisionBadge(decision, large) {
@@ -175,7 +193,7 @@
     samples: [],
     selectedSample: null,
     source: "sample",
-    job: null,          // summary + result from GET /api/reviews/{id}
+    job: null,
     jobId: null,
     lastSeq: 0,
     events: [],
@@ -185,6 +203,7 @@
     filter: "all",
     stepFilter: null,
     stream: null,
+    link: "idle",
     approvalOpenedFor: null,
   };
 
@@ -226,20 +245,26 @@
     }
   });
 
-  // ------------------------------------------------------------------ theme
+  // ------------------------------------------------------------------ theme + clock
 
   function applyTheme(theme) {
-    if (theme === "light" || theme === "dark") document.documentElement.setAttribute("data-theme", theme);
+    if (theme === "light") document.documentElement.setAttribute("data-theme", "light");
     else document.documentElement.removeAttribute("data-theme");
   }
   applyTheme(store.getLocal("rulegate.theme"));
   $("theme-toggle").addEventListener("click", () => {
-    const current = document.documentElement.getAttribute("data-theme") ||
-      (matchMedia("(prefers-color-scheme: dark)").matches ? "dark" : "light");
-    const next = current === "dark" ? "light" : "dark";
+    const next = document.documentElement.getAttribute("data-theme") === "light" ? "dark" : "light";
     applyTheme(next);
     store.setLocal("rulegate.theme", next);
   });
+
+  function tickClock() {
+    const now = new Date();
+    $("utc-clock").textContent = `${now.getUTCFullYear()}-${pad(now.getUTCMonth() + 1)}-${pad(now.getUTCDate())} ${utc(now.toISOString())}`;
+    if (state.job && !["completed", "failed"].includes(state.job.status)) renderElapsed();
+  }
+  tickClock();
+  setInterval(tickClock, 1000);
 
   // ------------------------------------------------------------------ boot
 
@@ -249,7 +274,8 @@
     state.samples = samples;
     $("auth-screen").hidden = true;
     $("app").hidden = false;
-    renderEnvChips();
+    renderBanner();
+    renderStatusStrip();
     renderSamples();
     applyModeAvailability();
     renderFilters();
@@ -258,20 +284,43 @@
     if (running) openJob(running.id);
   }
 
-  function renderEnvChips() {
-    const c = state.config;
-    const chips = $("env-chips");
-    clear(chips);
-    chips.append(
-      h("span", { class: "chip ok", title: "No endpoint can change a firewall" }, icon("lock"), "Read-only"),
-      h("span", { class: "chip", title: "Rulebase source" }, icon("file"), c.mode === "offline" ? "Offline exports" : c.mode),
-      c.llm_configured
-        ? h("span", { class: "chip ok", title: "LLM used by the agents" }, icon("brain"), c.model || "LLM configured")
-        : h("span", { class: "chip warn", title: "Set MODEL and an API key in .env to enable agents" }, icon("alert"), "No LLM configured"),
-    );
+  function renderBanner() {
+    const text = state.config.banner;
+    for (const id of ["banner-top", "banner-bottom"]) {
+      $(id).hidden = !text;
+      $(id).textContent = text || "";
+    }
+    document.body.classList.toggle("has-banner", Boolean(text));
   }
 
-  // ------------------------------------------------------------------ new review form
+  function ledItem(led, label, value, opt, title) {
+    return h("div", { class: `led-item${opt ? " opt" : ""}`, title: title || null },
+      h("span", { class: `led ${led}` }), label, value ? h("b", { text: value }) : null);
+  }
+
+  function renderStatusStrip() {
+    const c = state.config;
+    const strip = $("status-strip");
+    const clockItem = strip.lastElementChild;
+    clear(strip);
+    const linkLed = state.link === "live" ? "ok pulse" : state.link === "retry" ? "warn pulse" : "";
+    strip.append(
+      ledItem("ok", "Firewall access", "read-only", false, "No endpoint can change a firewall"),
+      ledItem("info", "Rulebase", c.mode === "offline" ? "offline export" : c.mode, true, "Rulebase source"),
+      c.llm_configured
+        ? ledItem("ok", "Model", c.model || "configured", true, "LLM used by the agents")
+        : ledItem("warn", "Model", "not configured", true, "Set MODEL and an API key in .env to enable agents"),
+      ledItem(linkLed, "Event link", state.link === "live" ? "live" : state.link === "retry" ? "reconnecting" : "idle", true, "Live event stream"),
+      clockItem);
+  }
+
+  function setLink(status) {
+    if (state.link === status) return;
+    state.link = status;
+    if (state.config) renderStatusStrip();
+  }
+
+  // ------------------------------------------------------------------ intake form
 
   function renderSamples() {
     const list = $("sample-list");
@@ -282,7 +331,7 @@
         dataset: { id: s.id },
       },
       h("span", { class: "sid", text: s.change_id || s.id }),
-      h("span", { class: `vendor-tag ${s.vendor || ""}`, text: s.vendor ? (s.vendor === "panos" ? "PAN-OS" : "FTD") : "Free text" }),
+      h("span", { class: `vendor-tag ${s.vendor || ""}`, text: s.vendor ? (s.vendor === "panos" ? "PAN-OS" : "FTD") : "TEXT" }),
       h("span", { class: "stitle", text: s.title }));
       btn.addEventListener("click", () => selectSample(s.id, true));
       btn.addEventListener("keydown", (ev) => {
@@ -307,7 +356,7 @@
     }
     const s = state.samples.find((x) => x.id === id);
     $("sample-hint").textContent = s && s.format === "text"
-      ? "Free-text sample: needs the agent intake (LLM)."
+      ? "Free-text sample: requires the agent intake (LLM)."
       : "Labeled scenarios with expected decisions.";
     updateRunAvailability();
   }
@@ -345,8 +394,7 @@
   });
 
   function updateCount(kind) {
-    const el = $(`${kind}-input`);
-    $(`${kind}-count`).textContent = `${el.value.length} / 32000`;
+    $(`${kind}-count`).textContent = `${$(`${kind}-input`).value.length} / 32000`;
   }
   $("yaml-input").addEventListener("input", () => { updateCount("yaml"); $("yaml-errors").hidden = true; });
   $("text-input").addEventListener("input", () => { updateCount("text"); $("text-errors").hidden = true; updateRunAvailability(); });
@@ -380,11 +428,11 @@
     const sample = state.samples.find((x) => x.id === state.selectedSample);
     const needsLlm = state.source === "text" || (state.source === "sample" && sample && sample.format === "text");
     if (jobActive()) reason = state.job.status === "awaiting_approval"
-      ? "A review is waiting for your approval decision." : "A review is running. One review runs at a time.";
+      ? "A review is awaiting your approval decision." : "A review is in progress. One review runs at a time.";
     else if (needsLlm && !useLlm()) reason = state.config && state.config.llm_configured
-      ? "Free-text requests need the agent intake. Choose “Agents + deterministic engine”."
+      ? "Free-text requests need the agent intake. Select “Agents + deterministic engine”."
       : "Free-text requests need an LLM, which is not configured on the server.";
-    else if (state.source === "sample" && !sample) reason = "Choose a sample.";
+    else if (state.source === "sample" && !sample) reason = "Select a sample.";
     $("run-btn").disabled = Boolean(reason);
     $("run-note").textContent = reason;
   }
@@ -422,19 +470,19 @@
     }
   }
 
-  // ------------------------------------------------------------------ history
+  // ------------------------------------------------------------------ queue
 
   async function refreshHistory() {
     let jobs = [];
     try { jobs = await api("/api/reviews"); } catch { return; }
     const list = $("history");
     clear(list);
-    if (!jobs.length) { list.append(h("li", { class: "empty-note", text: "No reviews in this session yet." })); return; }
+    if (!jobs.length) { list.append(h("li", { class: "empty-note", text: "No reviews in this session." })); return; }
     for (const j of jobs) {
       const btn = h("button", { type: "button", "aria-current": String(j.id === state.jobId) },
         h("span", { class: "h-title", text: j.change_id || j.label }),
-        j.decision ? decisionBadge(j.decision) : h("span", { class: `status-pill status-${j.status}` }, h("span", { class: "dot" }), statusText(j.status)),
-        h("span", { class: "h-meta", text: `${fmtTime(j.created_at)} · ${j.use_llm ? "agents" : "deterministic"} · ${statusText(j.status)}` }));
+        j.decision ? decisionBadge(j.decision) : h("span", { class: `status-pill status-${j.status}` }, h("span", { class: "dot" }), h("span", { class: "txt", text: statusText(j.status) })),
+        h("span", { class: "h-meta", text: `${utc(j.created_at)} · ${j.use_llm ? "agents" : "deterministic"} · ${statusText(j.status)}` }));
       btn.addEventListener("click", () => openJob(j.id));
       list.append(h("li", null, btn));
     }
@@ -442,7 +490,7 @@
   $("refresh-history").addEventListener("click", refreshHistory);
 
   function statusText(s) {
-    return { queued: "Queued", running: "Running", awaiting_approval: "Awaiting approval", completed: "Completed", failed: "Failed" }[s] || s;
+    return { queued: "Queued", running: "Running", awaiting_approval: "Awaiting decision", completed: "Completed", failed: "Failed" }[s] || s;
   }
 
   // ------------------------------------------------------------------ open / stream a job
@@ -457,8 +505,8 @@
     for (const id2 of ["review-view", "pipeline-panel", "detail-panel"]) $(id2).hidden = false;
     $("approval-banner").hidden = true;
     $("error-banner").hidden = true;
-    clear($("feed"));
-    $("feed").append(h("li", { class: "feed-empty", text: "Waiting for the first event…" }));
+    $("step-filter-chip").hidden = true;
+    clear($("feed")).append(h("li", { class: "feed-empty", text: "Awaiting first event…" }));
     renderPipeline();
     selectTab("activity");
     await refreshJob();
@@ -471,7 +519,7 @@
     try {
       state.job = await api(`/api/reviews/${state.jobId}`);
     } catch (e) {
-      if (e.status === 404) { toast("That review is no longer available on the server.", "bad"); }
+      if (e.status === 404) toast("That review is no longer available on the server.", "bad");
       return;
     }
     renderHeader();
@@ -500,6 +548,7 @@
           if (res.status === 401) { lockConsole("Your access token was rejected."); return; }
           if (!res.ok || !res.body) throw new Error(`stream ${res.status}`);
           failures = 0;
+          setLink("live");
           const reader = res.body.getReader();
           const decoder = new TextDecoder();
           let buffer = "";
@@ -511,13 +560,14 @@
             while ((idx = buffer.indexOf("\n\n")) >= 0) {
               const chunk = buffer.slice(0, idx);
               buffer = buffer.slice(idx + 2);
-              if (handleSse(chunk) === "end") { await refreshJob(); refreshHistory(); return; }
+              if (handleSse(chunk) === "end") { setLink("idle"); await refreshJob(); refreshHistory(); return; }
             }
           }
         } catch (e) {
-          if (ctrl.signal.aborted) return;
+          if (ctrl.signal.aborted) { setLink("idle"); return; }
           failures += 1;
-          if (failures > 8) { toast("Lost connection to the live event stream.", "bad"); return; }
+          setLink("retry");
+          if (failures > 8) { setLink("idle"); toast("Lost connection to the live event stream.", "bad"); return; }
           await new Promise((r) => setTimeout(r, Math.min(1000 * failures, 5000)));
         }
       }
@@ -546,8 +596,7 @@
 
   function setStep(id, status) {
     if (!id || !STEP_BY_ID[id]) return;
-    const prev = state.steps[id];
-    if (prev === "done" && status === "active") return;
+    if (state.steps[id] === "done" && status === "active") return;
     state.steps[id] = status;
   }
 
@@ -593,76 +642,84 @@
     }
     renderPipeline();
     renderFeedItem(ev);
+    renderElapsed();
   }
 
-  // ------------------------------------------------------------------ header + pipeline
+  // ------------------------------------------------------------------ header strip + pipeline
 
   function renderHeader() {
     const j = state.job;
     const r = j.result;
     $("rv-id").textContent = j.change_id || j.label;
-    const dec = $("rv-decision");
-    clear(dec);
+    const dec = clear($("rv-decision"));
     if (j.decision) dec.append(decisionBadge(j.decision, true));
-    const meta = $("rv-meta");
-    clear(meta);
+    const meta = clear($("rv-meta"));
     const req = r && r.request;
-    if (req) {
-      meta.append(h("span", null, icon("shield"), VENDOR_LABEL[req.target.vendor] || req.target.vendor),
-        h("span", { text: req.target.device_group || "—" }));
-    }
-    meta.append(h("span", null, icon(j.use_llm ? "brain" : "cpu"), j.use_llm ? `Agents (${j.process})` : "Deterministic only"),
-      h("span", null, icon("clock"), `Started ${fmtTime(j.created_at)}`));
+    if (req) meta.append(h("span", null, "VENDOR ", h("b", { text: VENDOR_LABEL[req.target.vendor] || req.target.vendor })),
+      h("span", null, "SCOPE ", h("b", { text: req.target.device_group || "—" })));
+    meta.append(h("span", null, "MODE ", h("b", { text: j.use_llm ? `agents · ${j.process}` : "deterministic" })),
+      h("span", null, "INPUT ", h("b", { text: j.free_text ? "free text" : "structured" })));
+
     const pill = $("rv-status");
     pill.className = `status-pill status-${j.status}`;
     pill.querySelector(".txt").textContent = statusText(j.status);
-    renderRing(j.risk_score);
+    renderMeter(j.risk_score);
+    renderElapsed();
+
+    const gate = $("rv-gate");
+    if (j.status === "awaiting_approval") gate.textContent = "AWAITING REVIEWER DECISION";
+    else if (r && r.final) gate.textContent = r.gate;
+    else gate.textContent = "Pending routing";
   }
 
-  function renderRing(score) {
-    const ring = clear($("rv-ring"));
-    const ns = "http://www.w3.org/2000/svg";
-    const svg = document.createElementNS(ns, "svg");
-    svg.setAttribute("viewBox", "0 0 120 120");
-    const C = 2 * Math.PI * 52;
-    const band = score == null ? "" : score >= 70 ? "score-crit" : score >= 40 ? "score-high" : score >= 15 ? "score-med" : "score-ok";
-    for (const [cls, offset] of [["track", 0], [`value ${band}`, score == null ? C : C * (1 - score / 100)]]) {
-      const c = document.createElementNS(ns, "circle");
-      c.setAttribute("cx", "60"); c.setAttribute("cy", "60"); c.setAttribute("r", "52");
-      c.setAttribute("fill", "none"); c.setAttribute("stroke-width", "11"); c.setAttribute("stroke-linecap", "round");
-      c.setAttribute("class", cls);
-      c.setAttribute("stroke-dasharray", String(C));
-      c.setAttribute("stroke-dashoffset", String(offset));
-      svg.appendChild(c);
-    }
-    ring.append(svg, h("div", { class: `label ${band}` },
-      h("div", null, h("strong", { text: score == null ? "–" : String(score) }), h("small", { text: "risk / 100" }))));
-    ring.setAttribute("aria-label", score == null ? "Risk score not yet available" : `Risk score ${score} out of 100`);
+  function scoreBand(score) {
+    return score == null ? "" : score >= 70 ? "crit" : score >= 40 ? "high" : score >= 15 ? "med" : "ok";
+  }
+
+  function renderMeter(score) {
+    const meter = clear($("rv-meter"));
+    const band = scoreBand(score);
+    const lit = score == null ? 0 : Math.max(score > 0 ? 1 : 0, Math.round(score / 5));
+    for (let i = 0; i < 20; i++) meter.append(h("span", { class: i < lit ? `b-${band}` : "" }));
+    meter.setAttribute("aria-label", score == null ? "Risk score not yet available" : `Risk score ${score} out of 100`);
+    const el = $("rv-score");
+    el.className = `rs-big${band ? ` score-${band}` : ""}`;
+    el.textContent = score == null ? "—" : `${score} / 100`;
+  }
+
+  function renderElapsed() {
+    const j = state.job;
+    if (!j) return;
+    const start = new Date(j.created_at).getTime();
+    const last = state.events.length ? new Date(state.events[state.events.length - 1].ts).getTime() : start;
+    const end = ["completed", "failed"].includes(j.status) ? last : Date.now();
+    $("rv-elapsed").textContent = `T+${duration(end - start)} · ${state.events.length} events · started ${utc(j.created_at)}`;
   }
 
   function renderPipeline() {
     const ol = clear($("pipeline"));
     for (const s of STEPS) {
       const st = state.steps[s.id] || "pending";
-      const statusWord = { pending: "pending", active: "in progress", done: "complete", skipped: "skipped", failed: "failed", waiting: "waiting for reviewer" }[st];
       const nodeIcon = st === "done" ? "check" : st === "failed" ? "x" : st === "waiting" ? "clock" : s.icon;
       const node = h("button", {
         type: "button", class: "step-node",
-        "aria-label": `${s.label}: ${statusWord}. Show related activity.`,
+        "aria-label": `${s.label}: ${STATE_WORD[st]}. Filter the event log to this stage.`,
         "aria-pressed": String(state.stepFilter === s.id),
       }, icon(nodeIcon));
       node.addEventListener("click", () => setStepFilter(state.stepFilter === s.id ? null : s.id));
       const count = state.stepCounts[s.id];
+      const kindClass = { Engine: "k-engine", Agent: "k-agent", Human: "k-human" }[s.kind] || "";
       ol.append(h("li", { class: `step ${st}${state.stepFilter === s.id ? " selected" : ""}` },
         node,
-        h("span", { class: "step-kind", text: s.kind }),
+        h("span", { class: `label step-kind ${kindClass}`, text: s.kind }),
         h("span", { class: "step-label", text: s.label }),
         h("span", { class: "step-sub", text: s.sub }),
-        h("span", { class: "step-count", text: count ? `${count} tool call${count > 1 ? "s" : ""}` : st === "active" && s.kind === "Agent" ? "working…" : "" })));
+        h("span", { class: "step-state", text: STATE_WORD[st] }),
+        h("span", { class: "step-count", text: count ? `${count} tool call${count > 1 ? "s" : ""}` : "" })));
     }
   }
 
-  // ------------------------------------------------------------------ activity feed
+  // ------------------------------------------------------------------ event log
 
   function renderFilters() {
     const box = clear($("feed-filters"));
@@ -675,12 +732,11 @@
 
   function setStepFilter(stepId) {
     state.stepFilter = stepId;
-    const chip = $("step-filter-chip");
-    clear(chip);
+    const chip = clear($("step-filter-chip"));
     if (stepId) {
       const btn = h("button", { type: "button", class: "link-btn", "aria-label": "Clear stage filter" }, icon("x"));
       btn.addEventListener("click", () => setStepFilter(null));
-      chip.append(`Stage: ${STEP_BY_ID[stepId].label}`, btn);
+      chip.append(`STAGE: ${STEP_BY_ID[stepId].label.toUpperCase()}`, btn);
     }
     chip.hidden = !stepId;
     renderPipeline();
@@ -696,10 +752,18 @@
     }[ev.kind] || null;
   }
 
+  /** Provenance of an event. Tools and the guardrail are deterministic code even when an agent calls them. */
+  function provOf(ev) {
+    if (["tool_started", "tool_finished", "tool_error", "guardrail", "analysis_complete"].includes(ev.kind)) return "det";
+    if (["task_started", "task_completed", "task_failed", "thinking"].includes(ev.kind)) return "ai";
+    if (ev.kind === "approval_submitted") return "human";
+    return "flow";
+  }
+
   function visible(ev) {
     if (state.stepFilter && stepOfEvent(ev) !== state.stepFilter) return false;
     const f = FILTERS.find((x) => x.id === state.filter);
-    return !f || !f.kinds || f.kinds.includes(ev.kind);
+    return !f || !f.test || f.test(provOf(ev));
   }
 
   function rerenderFeed() {
@@ -711,7 +775,7 @@
       const item = feedItem(ev);
       if (item) { feed.append(item); n++; }
     }
-    if (!n) feed.append(h("li", { class: "feed-empty", text: state.events.length ? "No activity matches this filter." : "Waiting for the first event…" }));
+    if (!n) feed.append(h("li", { class: "feed-empty", text: state.events.length ? "No events match this filter." : "Awaiting first event…" }));
     $("feed-count").textContent = String(state.events.length);
   }
 
@@ -741,98 +805,96 @@
     return h("details", null, h("summary", { text: label }), h("pre", { text: prettyOutput(text) }));
   }
 
+  function taskName(ev) {
+    return STEP_BY_ID[ev.step] ? STEP_BY_ID[ev.step].label.toLowerCase() + " task" : ev.task || "task";
+  }
+
   function feedItem(ev) {
-    const agent = ev.agent || (ev.step && STEP_BY_ID[ev.step] ? STEP_BY_ID[ev.step].label : null);
-    let kind = "flow", ic = "flag", actor = "Flow", title = [], extra = [];
+    // short stage name (e.g. "Rulebase Analyst") reads better than the full templated role
+    const agent = (ev.step && STEP_BY_ID[ev.step] ? STEP_BY_ID[ev.step].label : null) || ev.agent;
+    const p = provOf(ev);
+    let actor = "Flow", src = null, mark = "", body = [], extra = [];
     switch (ev.kind) {
       case "intake_started":
-        ic = "inbox"; title = [h("strong", { text: "Change request received" }), ev.free_text ? " — free text, sending to the intake agent" : " — structured request"];
+        src = "intake"; body = [h("strong", { text: "Change request received" }), ev.free_text ? " — free text, routed to the intake agent" : " — structured request, schema-validated"];
         break;
       case "analysis_complete": {
-        kind = "engine"; ic = "cpu"; actor = "Deterministic engine";
+        actor = "Analysis engine"; src = "shadow.py · risk_rules.py";
         const j = state.job;
-        title = [h("strong", { text: "Deterministic analysis complete" }), j && j.decision ? ` — ${DECISION_LABEL[j.decision]}, risk ${j.risk_score}/100` : ""];
-        extra.push(h("div", { class: "feed-note", text: "Shadow / duplicate / deny-override analysis and RG-001…RG-016 checks ran in Python. Agents can read these facts but cannot change them." }));
+        body = [h("strong", { text: "Deterministic analysis complete" }), j && j.decision ? ` — ${DECISION_LABEL[j.decision]}, risk ${j.risk_score}/100` : ""];
+        extra.push(h("div", { class: "feed-note", text: "Duplicate / shadow / deny-override analysis and RG-001…RG-016 evaluated in Python. Agents may read these facts but cannot alter them." }));
         break;
       }
-      case "crew_skipped": ic = "cpu"; title = [h("strong", { text: "Agent crew skipped" }), " — deterministic-only run"]; break;
-      case "crew_started": kind = "agent"; ic = "agent"; actor = "Crew"; title = [h("strong", { text: "Review crew started" }), ` (${ev.process})`]; break;
+      case "crew_skipped": actor = "Crew"; src = "router"; body = [h("strong", { text: "Agent crew skipped" }), " — deterministic-only run"]; break;
+      case "crew_started": actor = "Crew"; src = ev.process; body = [h("strong", { text: "Review crew dispatched" }), ` (${ev.process})`]; break;
       case "task_started":
-        kind = "agent"; ic = "agent"; actor = agent || "Agent";
-        title = ["Started ", h("strong", { text: STEP_BY_ID[ev.step] ? STEP_BY_ID[ev.step].label.toLowerCase() + " task" : ev.task || "task" })];
+        actor = agent || "Agent"; src = agent; body = ["Started ", h("strong", { text: taskName(ev) })];
         break;
       case "thinking": {
         const key = ev.step || ev.agent || "x";
         if (state.thinkingShown.has(key)) return null;
         state.thinkingShown.add(key);
-        kind = "agent"; ic = "brain"; actor = agent || "Agent";
-        title = [h("span", { class: "thinking-dots", text: "Reasoning over tool results" })];
+        actor = agent || "Agent"; src = agent; body = [h("span", { class: "thinking-dots", text: "Reasoning over tool results" })];
         break;
       }
       case "tool_started":
-        kind = "tool"; ic = "tool"; actor = agent || "Agent";
-        title = ["Calling deterministic tool ", h("code", { text: ev.tool })];
+        actor = agent || "Agent"; src = ev.tool;
+        body = ["Invoked deterministic tool ", h("code", { text: ev.tool })];
         extra.push(details("Arguments", ev.args));
         break;
       case "tool_finished":
-        kind = "tool"; ic = "check"; actor = agent || "Agent";
-        title = ["Tool ", h("code", { text: ev.tool }), " returned", ev.duration_ms != null ? ` in ${ev.duration_ms} ms` : ""];
-        extra.push(details("Show tool output", ev.output));
+        actor = agent || "Agent"; src = ev.tool;
+        body = ["Tool ", h("code", { text: ev.tool }), " returned", ev.duration_ms != null ? ` in ${ev.duration_ms} ms` : ""];
+        extra.push(details("Tool output", ev.output));
         break;
       case "tool_error":
-        kind = "bad"; ic = "x"; actor = agent || "Agent";
-        title = ["Tool ", h("code", { text: ev.tool }), " failed"];
+        actor = agent || "Agent"; src = ev.tool; mark = "k-bad";
+        body = ["Tool ", h("code", { text: ev.tool }), " failed"];
         extra.push(h("div", { class: "feed-note", text: ev.error }));
         break;
       case "guardrail":
-        actor = "Evidence guardrail";
-        if (ev.success) { kind = "ok"; ic = "shield"; title = [h("strong", { text: "Guardrail passed" }), " — narrative cites only verified findings and rules"]; }
+        actor = "Evidence guardrail"; src = "crew.py";
+        if (ev.success) { mark = "k-ok"; body = [h("strong", { text: "Guardrail PASS" }), " — narrative cites only verified findings, rules and the computed decision"]; }
         else {
-          kind = "warn"; ic = "alert";
-          title = [h("strong", { text: "Guardrail rejected the draft" }), ` — sent back to the writer (attempt ${(ev.retry || 0) + 1})`];
+          mark = "k-warn";
+          body = [h("strong", { text: "Guardrail REJECT" }), ` — draft returned to the writer (attempt ${(ev.retry || 0) + 1})`];
           extra.push(h("div", { class: "feed-note", text: ev.error }));
         }
         break;
       case "task_completed":
-        kind = "agent"; ic = "check"; actor = agent || "Agent";
-        title = ["Finished ", h("strong", { text: STEP_BY_ID[ev.step] ? STEP_BY_ID[ev.step].label.toLowerCase() + " task" : ev.task || "task" })];
-        extra.push(details("Show task output", ev.output));
+        actor = agent || "Agent"; src = agent; body = ["Completed ", h("strong", { text: taskName(ev) })];
+        extra.push(details("Agent output", ev.output));
         break;
       case "task_failed":
-        kind = "bad"; ic = "x"; actor = agent || "Agent"; title = [h("strong", { text: "Task failed" })];
+        actor = agent || "Agent"; src = agent; mark = "k-bad"; body = [h("strong", { text: "Task failed" })];
         extra.push(h("div", { class: "feed-note", text: ev.error }));
         break;
-      case "crew_complete": kind = "ok"; ic = "check"; actor = "Crew"; title = [h("strong", { text: "All agents finished" })]; break;
+      case "crew_complete": actor = "Crew"; body = [h("strong", { text: "All agents complete" })]; break;
       case "approval_required":
-        kind = "warn"; ic = "shield"; actor = "Approval gate";
-        title = [h("strong", { text: "Human approval required" }), ` — ${ev.reason}`];
+        actor = "Router"; src = "flow.route"; mark = "k-warn";
+        body = [h("strong", { text: "Escalated to human approval" }), ` — ${ev.reason}`];
         break;
       case "approval_submitted":
-        kind = "ok"; ic = "check"; actor = "Reviewer";
-        title = [h("strong", { text: ev.action }), ` by ${ev.reviewer}`];
+        actor = ev.reviewer; src = "approval gate"; mark = "k-human";
+        body = [h("strong", { text: ev.action }), " — decision recorded with timestamp"];
         break;
       case "approval_timeout":
-        kind = "warn"; ic = "clock"; actor = "Approval gate";
-        title = [h("strong", { text: "No decision received" }), ` within ${ev.minutes} minutes — recorded as deferred`];
+        actor = "Approval gate"; src = "timeout"; mark = "k-warn";
+        body = [h("strong", { text: "No decision received" }), ` within ${ev.minutes} minutes — recorded as DEFERRED`];
         break;
       case "report_written":
-        kind = "ok"; ic = "file"; title = [h("strong", { text: "Decision package written" })];
+        actor = "Report writer"; src = "cab_report.md.j2"; mark = "k-ok"; body = [h("strong", { text: "Decision package written" })];
         extra.push(h("div", { class: "feed-note", text: `Approval gate: ${ev.gate}` }));
         break;
-      case "completed": kind = "ok"; ic = "check"; title = [h("strong", { text: "Review complete" })]; break;
-      case "failed":
-        kind = "bad"; ic = "alert"; title = [h("strong", { text: "Review failed" })];
-        extra.push(h("div", { class: "feed-note", text: ev.error }));
-        break;
-      default:
-        title = [ev.kind];
+      case "completed": actor = "Flow"; mark = "k-ok"; body = [h("strong", { text: "Review complete" })]; break;
+      case "failed": actor = "Flow"; mark = "k-bad"; body = [h("strong", { text: "Review failed" })]; extra.push(h("div", { class: "feed-note", text: ev.error })); break;
+      default: body = [ev.kind];
     }
-    return h("li", { class: "feed-item" },
-      h("span", { class: "feed-time", text: fmtTime(ev.ts) }),
-      h("span", { class: `feed-icon k-${kind}` }, icon(ic)),
-      h("div", { class: "feed-body" },
-        h("div", { class: "feed-title" }, h("span", { class: "feed-actor", text: actor }), ...title),
-        ...extra));
+    return h("li", { class: `feed-item ${mark}` },
+      h("span", { class: "feed-time", text: utc(ev.ts) }),
+      h("span", { class: "feed-src", title: src ? `${PROV_TITLE[p]} · ${src}` : PROV_TITLE[p] }, prov(p)),
+      h("span", { class: "feed-actor", text: actor, title: ev.agent || actor }),
+      h("div", { class: "feed-body" }, ...body, ...extra));
   }
 
   // ------------------------------------------------------------------ tabs
@@ -861,15 +923,42 @@
 
   // ------------------------------------------------------------------ decision package
 
-  function section(titleText, iconName, sub, ...content) {
+  function section(titleText, iconName, provNode, sub, ...content) {
     return h("section", { class: "section" },
-      h("div", { class: "section-head" }, h("h2", null, icon(iconName), titleText), sub ? h("span", { class: "sub", text: sub }) : null),
+      h("div", { class: "section-head" },
+        h("h2", null, icon(iconName), titleText),
+        h("div", { class: "meta" }, sub ? h("span", { class: "sub", text: sub }) : null, provNode)),
       ...content);
   }
 
-  function stat(k, v, d, extraNode) {
-    return h("div", { class: "stat" }, h("div", { class: "k", text: k }), v instanceof Node ? h("div", { class: "v" }, v) : h("div", { class: "v", text: v }),
-      d ? h("div", { class: "d", text: d }) : null, extraNode || null);
+  function kpi(label, value, desc, provNode, extraNode, small) {
+    return h("div", { class: "kpi" }, h("span", { class: "label", text: label }),
+      value instanceof Node ? h("div", { class: `v${small ? " small" : ""}` }, value) : h("div", { class: `v${small ? " small" : ""}`, text: value }),
+      desc ? h("div", { class: "d", text: desc }) : null, extraNode || null, provNode);
+  }
+
+  function guardrailStats() {
+    let pass = 0, reject = 0;
+    for (const e of state.events) if (e.kind === "guardrail") { if (e.success) pass++; else reject++; }
+    return { pass, reject };
+  }
+
+  function evidenceChain(f) {
+    const weights = (state.config && state.config.severity_weights) || {};
+    const inputs = f.evidence.filter((e) => e.kind === "request_field" || e.kind === "object");
+    const rules = f.evidence.filter((e) => e.kind === "rule");
+    const node = (cls, label, ...vals) => h("div", { class: `chain-node ${cls}` }, h("span", { class: "label", text: label }),
+      ...vals.map((v) => h("span", { class: "val", text: v })));
+    const arrow = () => h("span", { class: "chain-arrow", "aria-hidden": "true", text: "→" });
+    const parts = [];
+    if (inputs.length) parts.push(node("c-input", "Input · change request", ...inputs.map((e) => `${e.ref}${e.detail ? ` = ${e.detail}` : ""}`)));
+    if (rules.length) parts.push(arrow(), node("c-det", "Rulebase · first-match", ...rules.map((e) => `${e.ref}${e.detail ? ` (${e.detail})` : ""}`)));
+    parts.push(arrow(), node("c-det", "Check · risk_rules.py", `${f.check_id} — ${f.title}`));
+    parts.push(arrow(), node("c-pol", "Policy · compliance", ...(f.compliance.length ? f.compliance : ["No mapped clause (internal standard applies)"])));
+    const w = weights[f.severity];
+    parts.push(arrow(), node("c-out", "Outcome · risk_policy.yaml", `${f.severity.toUpperCase()}${w != null ? ` · +${w} risk points` : ""}`));
+    if (parts[0].classList && parts[0].classList.contains("chain-arrow")) parts.shift();
+    return h("div", { class: "chain", role: "list", "aria-label": `Evidence chain for ${f.check_id}` }, parts);
   }
 
   function renderPackage() {
@@ -877,7 +966,7 @@
     const j = state.job;
     const r = j && j.result;
     if (!r) {
-      box.append(h("div", { class: "placeholder", text: "The decision package appears as soon as the deterministic analysis finishes." }));
+      box.append(h("div", { class: "placeholder", text: "The decision package appears as soon as the deterministic analysis completes." }));
       return;
     }
     const risk = r.risk;
@@ -891,35 +980,51 @@
         return span;
       }));
 
-    box.append(h("div", { class: "cards" },
-      stat("Recommendation", decisionBadge(risk.decision), DECISION_TEXT[risk.decision]),
-      stat("Risk score", `${risk.risk_score} / 100`, "Sum of policy severity weights, capped at 100"),
-      stat("Findings", String(total), total ? SEV_ORDER.filter((s) => counts[s]).map((s) => `${counts[s]} ${s}`).join(" · ") : "No checks fired", total ? bars : null),
-      stat("Human review", risk.needs_human_review ? "Required" : "Not required", risk.needs_human_review ? `${risk.review_notes.length} item(s) could not be resolved offline` : "All dependent objects resolved"),
-      stat("Approval gate", r.final ? h("span", { class: "small", text: r.gate }) : (j.status === "awaiting_approval" ? "Awaiting reviewer" : "Pending"), null),
-    ));
+    const gateNode = r.final
+      ? kpi("Approval gate", r.gate, null, /^(ACCEPTED|OVERRIDDEN|DEFERRED)/.test(r.gate) ? prov("human", "reviewer") : prov("flow", "router"), null, true)
+      : kpi("Approval gate", j.status === "awaiting_approval" ? "AWAITING" : "PENDING", j.status === "awaiting_approval" ? "Reviewer decision required" : "Routing after analysis", prov("flow", "router"));
+
+    box.append(h("div", { class: "kpis" },
+      kpi("Recommendation", decisionBadge(risk.decision), DECISION_TEXT[risk.decision], prov("det", "decide()")),
+      kpi("Risk score", `${risk.risk_score} / 100`, "Σ policy severity weights, capped at 100", prov("det", "risk_policy.yaml")),
+      kpi("Findings", String(total), total ? SEV_ORDER.filter((s) => counts[s]).map((s) => `${counts[s]} ${s}`).join(" · ") : "No checks fired", prov("det", "risk_rules.py"), total ? bars : null),
+      kpi("Human review", risk.needs_human_review ? "REQUIRED" : "NOT REQUIRED", risk.needs_human_review ? `${risk.review_notes.length} unresolved item(s)` : "All dependent objects resolved", prov("det", "shadow.py")),
+      gateNode));
 
     if (r.final) {
-      const dl = h("div", { class: "downloads" },
-        downloadBtn("review.md", r.report_markdown, "text/markdown"),
-        downloadBtn(r.staged.filename, r.staged.config, "text/plain"),
-        downloadBtn("findings.json", JSON.stringify({ request: r.request, risk: r.risk, shadow: r.shadow, approval_gate: r.gate }, null, 2), "application/json"),
-        printBtn());
-      box.append(h("div", { class: "section-head" }, h("span", { class: "sub", text: "CAB package files (generated in your browser from this review)" }), dl));
+      box.append(h("div", { class: "downloads-bar" },
+        h("span", { class: "label", text: "CAB package · generated in-browser from this review" }),
+        h("div", { class: "downloads" },
+          downloadBtn("review.md", r.report_markdown, "text/markdown"),
+          downloadBtn(r.staged.filename, r.staged.config, "text/plain"),
+          downloadBtn("findings.json", JSON.stringify({ request: r.request, risk: r.risk, shadow: r.shadow, approval_gate: r.gate }, null, 2), "application/json"),
+          printBtn())));
     }
 
-    // Findings
+    // Findings with evidence chain
     const sorted = [...risk.findings].sort((a, b) => SEV_ORDER.indexOf(a.severity) - SEV_ORDER.indexOf(b.severity));
-    box.append(section("Findings", "alert", "Produced by deterministic checks; severity from config/risk_policy.yaml",
+    const rows = [];
+    for (const f of sorted) {
+      const chainRow = h("tr", { class: "chain-row", hidden: true }, h("td", { colspan: "6" }, evidenceChain(f)));
+      const toggle = h("button", { type: "button", class: "link-btn chain-toggle", "aria-expanded": "false" }, "▸ Evidence chain");
+      toggle.addEventListener("click", () => {
+        const open = chainRow.hidden;
+        chainRow.hidden = !open;
+        toggle.setAttribute("aria-expanded", String(open));
+        toggle.textContent = open ? "▾ Evidence chain" : "▸ Evidence chain";
+      });
+      rows.push(h("tr", null,
+        h("td", null, sevSpan(f.severity)),
+        h("td", { class: "mono", text: f.check_id }),
+        h("td", null, h("div", { class: "f-title", text: f.title }), h("div", { class: "feed-note", text: f.detail }), toggle),
+        h("td", null, h("div", { class: "evidence" }, f.evidence.map((e) => h("span", { text: `${e.kind}: ${e.ref}${e.detail ? ` (${e.detail})` : ""}` })))),
+        h("td", { text: f.remediation || "" }),
+        h("td", null, f.compliance.length ? h("div", { class: "refs" }, f.compliance.map((c) => h("span", { text: c }))) : h("span", { class: "none", text: "—" }))), chainRow);
+    }
+    box.append(section("Findings", "alert", prov("det", "risk_rules.py · RG-001…016"), "severity from risk_policy.yaml",
       sorted.length ? h("div", { class: "table-wrap" }, h("table", null,
         h("thead", null, h("tr", null, ["Severity", "Check", "Finding", "Evidence", "Remediation", "Compliance"].map((c) => h("th", { scope: "col", text: c })))),
-        h("tbody", null, sorted.map((f) => h("tr", null,
-          h("td", null, sevSpan(f.severity)),
-          h("td", { class: "mono", text: f.check_id }),
-          h("td", null, h("strong", { text: f.title }), h("div", { class: "feed-note", text: f.detail })),
-          h("td", null, h("div", { class: "evidence" }, f.evidence.map((e) => h("span", { text: `${e.kind}: ${e.ref}${e.detail ? ` (${e.detail})` : ""}` })))),
-          h("td", { text: f.remediation || "" }),
-          h("td", null, f.compliance.length ? h("div", { class: "refs" }, f.compliance.map((c) => h("span", { text: c }))) : h("span", { class: "none", text: "—" })))))))
+        h("tbody", null, rows)))
         : h("div", { class: "placeholder", text: "No risk checks fired for this request." })));
 
     // Rulebase analysis
@@ -927,45 +1032,56 @@
     const ref = (x) => x ? `#${x.position} ${x.name} (${x.layer}, ${x.action})` : null;
     const kv = [
       ["Target section", `${s.section} · requested placement “${s.placement_requested}” · global position ${s.insertion_position}`],
-      ["Duplicate of (RG-013)", ref(s.duplicate_of)],
-      ["Shadowed by (RG-014)", ref(s.shadowed_by)],
-      ["Overrides deny (RG-015)", s.deny_overrides.map(ref).join("; ")],
+      ["Duplicate of · RG-013", ref(s.duplicate_of)],
+      ["Shadowed by · RG-014", ref(s.shadowed_by)],
+      ["Overrides deny · RG-015", s.deny_overrides.map(ref).join("; ")],
       ["Partial overlaps", s.partial_overlaps.map((p) => `${ref(p.rule)} — differs in ${p.partial_dimensions.join(", ")}`).join("; ")],
       ["Needs human review", s.needs_review.map((n) => `${ref(n.rule)}: ${n.reason}`).join("; ")],
       ["Disabled cleanup candidates", s.disabled_cleanup_candidates.map(ref).join("; ")],
       ["Recommended placement", s.recommended_placement],
     ];
-    box.append(section("Rulebase analysis", "cpu", "First-match evaluation against the offline rulebase export",
+    box.append(section("Rulebase analysis", "cpu", prov("det", "shadow.py · first-match"), "offline rulebase export",
       h("dl", { class: "kv" }, kv.flatMap(([k, v]) => [h("dt", { text: k }), h("dd", null, v ? v : h("span", { class: "none", text: "None" }))]))));
 
-    // Narrative
-    let narrativeNode;
-    if (r.final) { narrativeNode = h("div", { class: "md" }); renderMarkdown(r.narrative || "", narrativeNode); }
-    else narrativeNode = h("div", { class: "placeholder" }, j.use_llm ? h("span", { class: "thinking-dots", text: "The CAB Report Writer is preparing the narrative" }) : "Written when the review finishes.");
-    box.append(section("Analyst narrative", "agent", j.use_llm ? "Written by the CAB Report Writer agent; checked by the evidence guardrail" : "Deterministic-only run", narrativeNode));
+    // Narrative (AI) with guardrail status
+    let narrative;
+    const g = guardrailStats();
+    if (r.final && j.use_llm) {
+      const md = h("div", { class: "md" });
+      renderMarkdown(r.narrative || "", md);
+      narrative = [md, h("div", { class: "ai-note" },
+        h("span", null, "GUARDRAIL ", h("span", { class: g.pass ? "ok" : "", text: g.pass ? "PASS" : "—" })),
+        g.reject ? h("span", { class: "warn", text: `${g.reject} draft(s) rejected before acceptance` }) : null,
+        h("span", { text: "Cites only verified check IDs and related rules; cannot change the decision." }))];
+    } else if (r.final) {
+      narrative = [h("div", { class: "placeholder", text: "Deterministic-only run: no AI narrative generated. All findings above are computed." })];
+    } else {
+      narrative = [h("div", { class: "placeholder" }, j.use_llm ? h("span", { class: "thinking-dots", text: "CAB Report Writer is drafting the narrative" }) : "Written when the review completes.")];
+    }
+    box.append(section("Analyst narrative", "agent", j.use_llm ? prov("ai", "CAB Report Writer") : prov("flow", "not generated"),
+      j.use_llm ? "guardrail-verified" : null, ...narrative));
 
     // Staged config, tests, rollback
     if (r.final) {
       const st = r.staged;
+      const tmpl = st.vendor === "panos" ? "panos_set.j2" : "fmc_accessrule.json.j2";
       const copy = h("button", { type: "button", class: "btn small" }, icon("copy"), "Copy");
       copy.addEventListener("click", async () => {
         try { await navigator.clipboard.writeText(st.config); toast("Staged configuration copied.", "ok", 2500); }
         catch { toast("Clipboard is not available in this browser context.", "bad"); }
       });
-      box.append(section("Staged configuration", "file", null,
+      box.append(section("Staged configuration", "file", prov("det", `render.py · ${tmpl}`), null,
         h("div", { class: "code-card" },
-          h("div", { class: "bar" }, h("span", { class: "stage-flag" }, icon("lock"), "STAGED — NOT APPLIED"),
-            h("span", { class: "grow", text: `${st.filename} · apply only through the approved change process` }), copy),
+          h("div", { class: "bar" }, h("span", { class: "stage-flag" }, icon("lock"), "STAGED · NOT APPLIED"),
+            h("span", { class: "grow", text: `${st.filename} — apply only through the approved change process` }), copy),
           h("pre", null, h("code", { text: st.config })))));
       box.append(h("div", { class: "two-col" },
-        section("Test plan", "check", "Run before and after the change", h("ol", { class: "steps" }, st.test_plan.map((t) => h("li", null, h("code", { text: t }))))),
-        section("Rollback", "flag", null, h("ol", { class: "steps" }, st.rollback.map((t) => h("li", null, h("code", { text: t })))))));
+        section("Test plan", "check", prov("det", "render.py"), "pre / post change", h("ol", { class: "steps" }, st.test_plan.map((t) => h("li", null, h("code", { text: t }))))),
+        section("Rollback", "flag", prov("det", "render.py"), null, h("ol", { class: "steps" }, st.rollback.map((t) => h("li", null, h("code", { text: t })))))));
     }
 
-    // Items needing human review
-    const items = [...risk.review_notes];
-    box.append(section("Items needing human review", "shield", null,
-      items.length ? h("ul", { class: "steps" }, items.map((n) => h("li", { text: n }))) : h("p", { class: "none", text: "None." })));
+    box.append(section("Items requiring human review", "shield", prov("det", "shadow.py · scan()"), null,
+      risk.review_notes.length ? h("ul", { class: "steps" }, risk.review_notes.map((n) => h("li", { text: n }))) : h("div", { class: "placeholder", text: "None." })));
   }
 
   function downloadBtn(name, content, type) {
@@ -987,11 +1103,12 @@
     return b;
   }
 
-  // ------------------------------------------------------------------ request tab
+  // ------------------------------------------------------------------ change request tab
 
   function renderRequest() {
     const box = clear($("tab-request"));
-    const r = state.job && state.job.result;
+    const j = state.job;
+    const r = j && j.result;
     if (!r) { box.append(h("div", { class: "placeholder", text: "Shown once the request has been parsed and validated." })); return; }
     const cr = r.request, q = cr.request;
     const list = (v) => (Array.isArray(v) ? v.join(", ") : v);
@@ -1008,13 +1125,14 @@
         : [q.intrusion_policy && `IPS: ${q.intrusion_policy}`, q.file_policy && `File: ${q.file_policy}`, q.ftd_action === "trust" && "Action: Trust", q.prefilter_fastpath && "Prefilter Fastpath"].filter(Boolean).join(" · ") || null],
       ["Placement", q.placement], ["Temporary", cr.temporary ? `Yes${cr.expiry ? `, expires ${cr.expiry}` : " — no expiry"}` : "No"],
     ];
-    box.append(section("Normalized change request", "inbox", "Vendor-neutral schema used by every check",
+    box.append(section("Normalized change request", "inbox",
+      j.free_text ? prov("ai", "intake agent · schema-validated") : prov("det", "schema-validated"), "vendor-neutral schema",
       h("dl", { class: "kv" }, rows.flatMap(([k, v]) => [h("dt", { text: k }), h("dd", null, v ? v : h("span", { class: "none", text: "Not provided" }))]))));
     box.append(h("div", { class: "two-col" },
-      section("Missing for CAB approval", "alert", null,
-        r.missing_fields.length ? h("ul", { class: "steps" }, r.missing_fields.map((m) => h("li", null, h("code", { text: m })))) : h("p", { class: "none", text: "Nothing missing." })),
-      section("Assumptions made at intake", "brain", null,
-        cr.assumptions.length ? h("ul", { class: "steps" }, cr.assumptions.map((a) => h("li", { text: a }))) : h("p", { class: "none", text: "None — structured request." }))));
+      section("Missing for CAB approval", "alert", prov("det", "missing_fields()"), null,
+        r.missing_fields.length ? h("ul", { class: "steps" }, r.missing_fields.map((m) => h("li", null, h("code", { text: m })))) : h("div", { class: "placeholder", text: "Nothing missing." })),
+      section("Assumptions made at intake", "agent", j.free_text ? prov("ai", "intake agent") : prov("det", "structured input"), null,
+        cr.assumptions.length ? h("ul", { class: "steps" }, cr.assumptions.map((a) => h("li", { text: a }))) : h("div", { class: "placeholder", text: "None — structured request." }))));
   }
 
   // ------------------------------------------------------------------ safe Markdown (subset)
@@ -1051,12 +1169,11 @@
         continue;
       }
       if ((m = /^(#{1,6})\s+(.*)$/.exec(line))) {
-        const level = Math.min(6, m[1].length + 2);
-        container.append(inline(m[2].replace(/#+\s*$/, ""), h(`h${level}`)));
+        container.append(inline(m[2].replace(/#+\s*$/, ""), h(`h${Math.min(6, m[1].length + 2)}`)));
         i++; continue;
       }
       if ((m = /^\s*\**\s*Recommendation:\s*\**\s*([A-Z_]+)\**\s*$/.exec(line))) {
-        container.append(h("div", { class: "recommendation" }, h("strong", { text: "Recommendation:" }), decisionBadge(m[1]) || m[1]));
+        container.append(h("div", { class: "recommendation" }, h("strong", { text: "Recommendation" }), decisionBadge(m[1]) || m[1]));
         i++; continue;
       }
       if (/^\s*([-*_])\1\1+\s*$/.test(line)) { container.append(h("hr")); i++; continue; }
@@ -1074,12 +1191,12 @@
       }
       if (/^\s*([-*+]|\d+[.)])\s+/.test(line)) {
         const ordered = /^\s*\d+[.)]\s+/.test(line);
-        const list = h(ordered ? "ol" : "ul");
+        const lst = h(ordered ? "ol" : "ul");
         while (i < lines.length && /^\s*([-*+]|\d+[.)])\s+/.test(lines[i])) {
-          list.append(inline(lines[i].replace(/^\s*([-*+]|\d+[.)])\s+/, ""), h("li")));
+          lst.append(inline(lines[i].replace(/^\s*([-*+]|\d+[.)])\s+/, ""), h("li")));
           i++;
         }
-        container.append(list);
+        container.append(lst);
         continue;
       }
       const para = [];
@@ -1100,7 +1217,7 @@
       renderPipeline();
       $("approval-banner-text").textContent =
         `${j.change_id}: deterministic recommendation ${DECISION_LABEL[j.decision] || j.decision} (risk ${j.risk_score}/100) — ${j.approval_reason || "review required"}. ` +
-        `Undecided reviews are recorded as deferred after ${state.config.approval_timeout_minutes} minutes.`;
+        `Undecided reviews are recorded as DEFERRED after ${state.config.approval_timeout_minutes} minutes.`;
       if (state.approvalOpenedFor !== j.id) { state.approvalOpenedFor = j.id; openApproval(); }
     } else if ($("approval-dialog").open) {
       $("approval-dialog").close();
@@ -1115,14 +1232,15 @@
     if (!j || j.status !== "awaiting_approval") return;
     const risk = j.result && j.result.risk;
     const sum = clear($("dlg-summary"));
-    sum.append(h("strong", { text: j.change_id }), decisionBadge(j.decision), h("span", { class: "chip", text: `Risk ${j.risk_score}/100` }),
-      h("span", { class: "chip warn", text: j.approval_reason || "review required" }));
+    sum.append(h("strong", { text: j.change_id }), decisionBadge(j.decision), h("span", { class: "chip", text: `RISK ${j.risk_score}/100` }),
+      h("span", { class: "chip", text: (j.approval_reason || "review required").toUpperCase() }));
     const ul = clear($("dlg-findings"));
     const serious = risk ? risk.findings.filter((f) => f.severity === "critical" || f.severity === "high") : [];
     if (serious.length) serious.forEach((f) => ul.append(h("li", null, sevSpan(f.severity), h("code", { text: f.check_id }), h("span", { text: f.title }))));
-    else ul.append(h("li", { class: "none", text: "None — gate triggered by items that need human review." }));
+    else ul.append(h("li", { class: "none", text: "None — escalated for items requiring human review." }));
     $("dlg-accept-desc").textContent = `Agree with the deterministic recommendation: ${DECISION_LABEL[j.decision] || j.decision}.`;
     $("dlg-attest-text").textContent = `I have reviewed the findings and their evidence for ${j.change_id}.`;
+    $("dlg-timeout").textContent = `Auto-defer after ${state.config.approval_timeout_minutes} min`;
     $("dlg-reviewer").value = store.get("rulegate.reviewer") || "";
     $("dlg-comment").value = "";
     $("dlg-count").textContent = "0 / 500";
@@ -1158,7 +1276,7 @@
       store.set("rulegate.reviewer", reviewer);
       $("approval-dialog").close();
       $("approval-banner").hidden = true;
-      toast("Decision recorded. Writing the CAB package…", "ok", 3500);
+      toast("Decision recorded. Generating the CAB package…", "ok", 3500);
       await refreshJob();
     } catch (e) {
       if (e.status !== 401) {

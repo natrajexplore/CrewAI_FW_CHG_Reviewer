@@ -11,7 +11,7 @@
 ![FastAPI](https://img.shields.io/badge/FastAPI-review%20console-009688?logo=fastapi&logoColor=white)
 ![Vendors](https://img.shields.io/badge/vendors-PAN--OS%20%7C%20Cisco%20FTD-1f5fd1)
 ![Read-only](https://img.shields.io/badge/firewall%20access-read--only-2ea44f)
-![Tests](https://img.shields.io/badge/tests-138%20passing-2ea44f)
+![Tests](https://img.shields.io/badge/tests-145%20passing-2ea44f)
 ![License](https://img.shields.io/badge/license-MIT-blue)
 
 [Quick start](#-quick-start) · [Review console](#-review-console-web-ui) · [How it works](#-how-it-works) · [Risk checks](#-risk-check-catalog) · [Security](#-safety-and-security-model) · [Roadmap](#-roadmap)
@@ -28,6 +28,7 @@
 
 ## 📑 Table of contents
 
+- [What's new](#-whats-new)
 - [Why RuleGate](#-why-rulegate)
 - [Key features](#-key-features)
 - [Quick start](#-quick-start)
@@ -46,6 +47,32 @@
 - [Roadmap](#-roadmap)
 - [Extending RuleGate](#-extending-rulegate)
 - [License and author](#-license)
+
+---
+
+## 🆕 What's new
+
+### Change Review Operations console, redesigned
+
+The web console (`rulegate serve`) now has a security-operations-centre look built for review by security leadership:
+
+- **Operations-centre interface:** a night theme by default (with a day theme), square geometry, grid surfaces and monospaced data. A status bar shows firewall access (read-only), rulebase source, model and the live event link, with a **UTC clock**. All event times are in UTC.
+- **Provenance on every panel:** each panel and each event-log row is tagged **DETERMINISTIC** (with the Python module), **AI-GENERATED** (with the agent), **HUMAN DECISION** (with the reviewer) or **ORCHESTRATION**. Tool calls made by agents are tagged deterministic, because the tool code is. The event log can be filtered by provenance.
+- **Evidence chain per finding:** expand any finding to trace request field → matching rulebase rule → RG check → policy and compliance clause → severity weight added to the risk score.
+- **Guardrail visibility:** the AI narrative shows its evidence-guardrail result, including how many drafts were rejected before one was accepted.
+- **Review header strip:** change ID and decision, a 20-segment risk meter, elapsed time and event count, and approval-gate status at a glance.
+- **Optional sensitivity banner:** set `RULEGATE_UI_BANNER` (for example `INTERNAL USE ONLY · CONFIDENTIAL`) to show your organisation's label at the top and bottom of the screen. It's off by default, and the value is validated before it's shown.
+
+### Security hardening
+
+- **Staged-config injection fixed:** request fields are restricted to safe character sets, so a crafted change request cannot smuggle extra commands into staged PAN-OS `set` output or the FMC payload. Unknown fields are rejected, so typos fail loudly instead of being silently ignored.
+- **Path traversal fixed:** `change_id` is pattern-restricted and report paths are re-checked, so a request cannot write outside `reports/`.
+- **Console controls:** loopback-only bind by default, a per-launch bearer token delivered in the URL fragment, Host allowlist, no CORS, strict Content-Security-Policy, request size limits, and DOM-only rendering with no third-party code. See [Review console security controls](#review-console-security-controls).
+
+### Quality
+
+- 145 automated tests, covering console authentication and headers, input validation and injection regressions, the approval flow, the event stream, and frontend hygiene (no HTML-parsing sinks, no inline styles or scripts, no third-party URLs).
+- Verified end to end in a headless browser in both themes, including a live agent review with OpenAI `gpt-4o`.
 
 ---
 
@@ -120,7 +147,7 @@ uv run rulegate review samples/change_requests/cr-1003-panos-any-any.yaml --no-l
 
 ## 🖥️ Review console (web UI)
 
-`rulegate serve` starts a local console for watching the agents work as a firewall reviewer and for recording the human decision.
+`rulegate serve` starts a local **change review operations console**, a security-operations-centre style interface for watching the agents work as a firewall reviewer and for recording the human decision.
 
 ```bash
 uv run rulegate serve              # binds 127.0.0.1:8000 and prints a one-time access link
@@ -147,13 +174,31 @@ uv run rulegate serve --port 8080
 </details>
 
 <details>
-<summary><b>📸 Dark mode</b></summary>
+<summary><b>📸 Evidence chain for a finding</b></summary>
 
-![Dark mode](docs/images/console-dark-mode.png)
+![Evidence chain](docs/images/console-evidence-chain.png)
 
 </details>
 
-The console supports light and dark themes, keyboard navigation and screen-reader labels, and adapts to narrow screens. Undecided approvals are recorded as deferred after 30 minutes. See [Review console security controls](#review-console-security-controls) for how it is hardened.
+<details>
+<summary><b>📸 Day theme</b></summary>
+
+![Day theme](docs/images/console-day-theme.png)
+
+</details>
+
+**Provenance on every panel.** Each panel and each event-log row is labeled with where the content came from:
+
+| Tag | Meaning |
+|---|---|
+| **DETERMINISTIC** · *source module* | Computed by Python from the request, the rulebase export and `risk_policy.yaml`. The same input always gives the same output. Tool calls made *by* agents are tagged deterministic, because the tool code is. |
+| **AI-GENERATED** · *agent* | Written by an LLM agent. It explains or summarizes facts but cannot change findings, severity or the decision. The narrative shows its guardrail result (pass, and any rejected drafts). |
+| **HUMAN DECISION** · *reviewer* | Recorded at the approval gate with name, UTC timestamp and justification. |
+| **ORCHESTRATION** · *flow* | Pipeline control: intake, routing, report generation. |
+
+Every finding also has an expandable **evidence chain**: the request fields, the matching rulebase rules, the RG check, the policy and compliance clauses, and the severity weight it adds to the score.
+
+The console has a night theme (default) and a day theme, a UTC clock and status lights (firewall access, rulebase source, model, live event link), keyboard navigation and screen-reader labels, and it adapts to narrow screens. An optional organisation sensitivity banner can be shown at the top and bottom of the screen with `RULEGATE_UI_BANNER` (for example `INTERNAL USE ONLY · CONFIDENTIAL`). Undecided approvals are recorded as deferred after 30 minutes. See [Review console security controls](#review-console-security-controls) for how it is hardened.
 
 ---
 
@@ -407,6 +452,7 @@ RuleGate is designed for production security infrastructure, so **safety is enfo
 | `RULEGATE_PANOS_RULEBASE` | Path to a PAN-OS / Panorama running-config XML (default: sample) |
 | `RULEGATE_FMC_RULEBASE` | Path to an FMC export JSON (default: sample) |
 | `RULEGATE_UI_TOKEN` | Fixed console access token (minimum 24 characters); random per launch if unset |
+| `RULEGATE_UI_BANNER` | Optional top and bottom sensitivity banner, e.g. `INTERNAL USE ONLY · CONFIDENTIAL` (up to 80 letters, digits, spaces and basic punctuation; off by default) |
 | `PANOS_*`, `FMC_*` | Live-mode settings (Phase 4; read-only roles only) |
 
 Risk behaviour is tuned in [`config/risk_policy.yaml`](config/risk_policy.yaml): severity weights, per-check severity overrides, CIDR thresholds, untrust/management/sensitive zones, management and cleartext ports, and compliance references per sensitive zone. The compliance knowledge base lives in [`knowledge/`](knowledge/); replace the samples with your own standard.

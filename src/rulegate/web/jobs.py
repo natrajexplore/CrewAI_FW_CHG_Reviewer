@@ -76,8 +76,9 @@ def _now() -> str:
 
 
 class Job:
-    def __init__(self, label: str, use_llm: bool, process: str):
+    def __init__(self, label: str, use_llm: bool, process: str, free_text: bool = False):
         self.id = uuid.uuid4().hex
+        self.free_text = free_text
         self.label = label
         self.use_llm = use_llm
         self.process = process
@@ -138,7 +139,8 @@ class Job:
     def summary(self) -> dict[str, Any]:
         return {
             "id": self.id, "label": self.label, "status": self.status.value, "created_at": self.created_at,
-            "use_llm": self.use_llm, "process": self.process, "change_id": self.change_id,
+            "use_llm": self.use_llm, "process": self.process, "free_text": self.free_text,
+            "change_id": self.change_id,
             "decision": self.decision, "risk_score": self.risk_score, "gate": self.gate,
             "error": self.error, "approval_reason": self.approval_reason,
         }
@@ -186,7 +188,7 @@ class JobManager:
         with self._lock:
             if self.active is not None and not self.active.finished:
                 raise BusyError("Another review is in progress. Wait for it to finish or complete its approval.")
-            job = Job(label=label, use_llm=use_llm, process=process)
+            job = Job(label=label, use_llm=use_llm, process=process, free_text=isinstance(request, str))
             self._jobs[job.id] = job
             while len(self._jobs) > self.max_jobs:
                 self._jobs.popitem(last=False)

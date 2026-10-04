@@ -18,6 +18,7 @@ import asyncio
 import json
 import logging
 import os
+import re
 import secrets
 from pathlib import Path
 from typing import Any, Literal
@@ -30,6 +31,7 @@ from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel, Field, ValidationError, model_validator
 from starlette.middleware.trustedhost import TrustedHostMiddleware
 
+from rulegate.analysis.risk_rules import load_policy
 from rulegate.models.change_request import NormalizedChangeRequest
 from rulegate.web.jobs import BusyError, JobManager, JobStatus, StateError, install_event_bridge
 
@@ -105,6 +107,20 @@ def llm_configured() -> bool:
     return bool(os.getenv("MODEL")) and any(os.getenv(k) for k in keys)
 
 
+BANNER_PATTERN = re.compile(r"^[A-Za-z0-9 .,:;/&()'\-·|]{1,80}$")
+
+
+def ui_banner() -> str | None:
+    """Optional organisation sensitivity banner (RULEGATE_UI_BANNER). Invalid values are ignored, not rendered."""
+    value = (os.getenv("RULEGATE_UI_BANNER") or "").strip()
+    if not value:
+        return None
+    if not BANNER_PATTERN.match(value):
+        log.warning("Ignoring RULEGATE_UI_BANNER: use up to 80 letters, digits, spaces and basic punctuation")
+        return None
+    return value
+
+
 def _validation_errors(exc: ValidationError) -> list[dict[str, str]]:
     # loc + msg only: never echo submitted values back
     def message(e: dict) -> str:
@@ -150,6 +166,8 @@ def create_app(token: str, *, allowed_hosts: list[str] | None = None, manager: J
     if bridge:
         install_event_bridge(manager)
     samples = load_samples()
+    banner = ui_banner()
+    policy = load_policy()
 
     app = FastAPI(title="RuleGate Review Console", docs_url=None, redoc_url=None, openapi_url=None)
     app.state.manager = manager
@@ -211,7 +229,9 @@ def create_app(token: str, *, allowed_hosts: list[str] | None = None, manager: J
     async def config():
         return {"llm_configured": llm_configured(), "model": os.getenv("MODEL") or None,
                 "mode": os.getenv("RULEGATE_MODE", "offline"), "read_only": True,
-                "approval_timeout_minutes": int(manager.approval_timeout // 60)}
+                "approval_timeout_minutes": int(manager.approval_timeout // 60),
+                "banner": banner,
+                "severity_weights": {k.value: v for k, v in policy.severity_weights.items()}}
 
     @app.get("/api/samples", dependencies=api)
     async def list_samples():

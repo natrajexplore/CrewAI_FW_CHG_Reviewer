@@ -4,27 +4,29 @@
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width, initial-scale=1">
   <meta name="referrer" content="no-referrer">
-  <meta name="color-scheme" content="light dark">
-  <title>RuleGate Review Console</title>
+  <meta name="color-scheme" content="dark light">
+  <title>RuleGate · Change Review Operations</title>
   <link rel="icon" href="/static/favicon.svg" type="image/svg+xml">
   <link rel="stylesheet" href="/static/app.css">
   <script src="/static/app.js" defer></script>
 </head>
 <body>
   <a class="skip" href="#main">Skip to main content</a>
+  <div class="banner-strip top" id="banner-top" role="note" hidden></div>
 
   <header class="topbar">
     <div class="brand">
       <div class="brand-mark" aria-hidden="true">
         <svg class="icon" viewBox="0 0 24 24"><path d="M12 2.5 4 5.5v6c0 5 3.4 8.7 8 10 4.6-1.3 8-5 8-10v-6z"/><path d="m8.5 12 2.5 2.5 4.5-5"/></svg>
       </div>
-      <div class="brand-text">
-        <span class="brand-name">RuleGate</span>
-        <span class="brand-sub">Firewall Change Review Console · PAN-OS &amp; Cisco FTD</span>
-      </div>
+      <span class="brand-name">RULEGATE</span>
+      <span class="brand-sep" aria-hidden="true">▸</span>
+      <span class="brand-sub">Change Review Operations</span>
     </div>
-    <div class="topbar-chips" id="env-chips" aria-label="Environment"></div>
-    <button class="icon-btn" id="theme-toggle" type="button" aria-label="Toggle colour theme" title="Toggle colour theme">
+    <div class="status-strip" id="status-strip" aria-label="System status">
+      <div class="led-item" title="UTC time"><span class="clock" id="utc-clock">--:--:--Z</span></div>
+    </div>
+    <button class="icon-btn" id="theme-toggle" type="button" aria-label="Switch between night and day theme" title="Night / day theme">
       <svg class="icon" viewBox="0 0 24 24" aria-hidden="true"><path d="M12 3a9 9 0 1 0 9 9 7 7 0 0 1-9-9z"/></svg>
     </button>
   </header>
@@ -32,16 +34,17 @@
   <!-- Access token screen -->
   <section class="auth" id="auth-screen" hidden aria-labelledby="auth-h">
     <div class="panel">
-      <h1 id="auth-h">Access token required</h1>
-      <p>Open the console with the link printed by <code>rulegate serve</code>, or paste the access token below.
-        The token is kept for this browser tab only.</p>
-      <form id="auth-form" novalidate>
-        <label class="field">Access token
-          <input type="password" id="auth-token" autocomplete="off" spellcheck="false" required minlength="24">
-        </label>
-        <div class="field-errors" id="auth-error" role="alert" hidden></div>
-        <button class="btn primary block" type="submit">Unlock console</button>
-      </form>
+      <div class="panel-head"><h2 id="auth-h">Operator authentication</h2><span class="label">Access token</span></div>
+      <div class="panel-body">
+        <p>Open the console with the link printed by <code>rulegate serve</code>, or paste the access token. It is held for this browser tab only.</p>
+        <form id="auth-form" novalidate>
+          <label class="field"><span class="label">Access token</span>
+            <input type="password" id="auth-token" autocomplete="off" spellcheck="false" required minlength="24">
+          </label>
+          <div class="field-errors" id="auth-error" role="alert" hidden></div>
+          <button class="btn primary block" type="submit">Authenticate</button>
+        </form>
+      </div>
     </div>
   </section>
 
@@ -49,177 +52,198 @@
     <aside class="sidebar" aria-label="Review controls">
       <section class="panel" aria-labelledby="new-h">
         <div class="panel-head">
-          <h2 id="new-h">New review</h2>
-          <span class="sub">Change request input</span>
+          <h2 id="new-h"><svg class="icon" viewBox="0 0 24 24" aria-hidden="true"><path d="M4 13h4l2 3h4l2-3h4"/><path d="M4 13 6.5 5h11L20 13v6H4z"/></svg>Intake</h2>
+          <span class="label">New change request</span>
         </div>
+        <div class="panel-body">
+          <div class="seg" role="tablist" aria-label="Request source">
+            <button type="button" role="tab" id="src-sample" aria-controls="pane-sample" aria-selected="true" data-source="sample">Sample</button>
+            <button type="button" role="tab" id="src-yaml" aria-controls="pane-yaml" aria-selected="false" data-source="yaml" tabindex="-1">YAML</button>
+            <button type="button" role="tab" id="src-text" aria-controls="pane-text" aria-selected="false" data-source="text" tabindex="-1">Free text</button>
+          </div>
 
-        <div class="seg" role="tablist" aria-label="Request source">
-          <button type="button" role="tab" id="src-sample" aria-controls="pane-sample" aria-selected="true" data-source="sample">Sample</button>
-          <button type="button" role="tab" id="src-yaml" aria-controls="pane-yaml" aria-selected="false" data-source="yaml" tabindex="-1">YAML</button>
-          <button type="button" role="tab" id="src-text" aria-controls="pane-text" aria-selected="false" data-source="text" tabindex="-1">Free text</button>
+          <div id="pane-sample" role="tabpanel" aria-labelledby="src-sample">
+            <div class="sample-list" id="sample-list" role="radiogroup" aria-label="Sample change requests"></div>
+            <div class="hint"><span id="sample-hint">Labeled scenarios with expected decisions.</span>
+              <button type="button" class="link-btn" id="edit-sample">Edit as YAML</button></div>
+          </div>
+
+          <div id="pane-yaml" role="tabpanel" aria-labelledby="src-yaml" hidden>
+            <label class="field" for="yaml-input"><span class="label">Change request · YAML</span></label>
+            <textarea id="yaml-input" spellcheck="false" autocomplete="off" maxlength="32000" class="mt-8"
+              aria-describedby="yaml-hint yaml-errors" placeholder="change_id: CR-3001&#10;target:&#10;  vendor: panos&#10;  device_group: DC-Core&#10;request:&#10;  source_zone: web-dmz&#10;  ..."></textarea>
+            <div class="hint" id="yaml-hint"><span>Schema-validated server-side. <span class="mono">Ctrl+Enter</span> to run.</span><span class="mono" id="yaml-count">0 / 32000</span></div>
+            <div class="field-errors" id="yaml-errors" role="alert" hidden></div>
+          </div>
+
+          <div id="pane-text" role="tabpanel" aria-labelledby="src-text" hidden>
+            <label class="field" for="text-input"><span class="label">Request · plain language</span></label>
+            <textarea id="text-input" class="prose mt-8" maxlength="32000" aria-describedby="text-hint text-errors"
+              placeholder="Please allow the web servers (10.20.30.0/27, web-dmz) to reach the payments DB 10.40.10.16 in db-trust on TCP 5432. Ticket CHG0045877."></textarea>
+            <div class="hint" id="text-hint"><span>Normalized by the intake agent; every assumption is listed.</span><span class="mono" id="text-count">0 / 32000</span></div>
+            <label class="field mt-10"><span class="label">Target vendor</span>
+              <select id="vendor-hint">
+                <option value="">Detect from text</option>
+                <option value="panos">Palo Alto PAN-OS</option>
+                <option value="ftd">Cisco FTD (FMC)</option>
+              </select>
+            </label>
+            <div class="field-errors" id="text-errors" role="alert" hidden></div>
+          </div>
+
+          <fieldset class="options">
+            <legend class="label">Analysis mode</legend>
+            <label class="radio-card" id="mode-llm-card">
+              <input type="radio" name="mode" value="llm" id="mode-llm" checked>
+              <span><strong>Agents + deterministic engine</strong><span>Six specialist agents explain, map and plan. Facts still come from Python.</span></span>
+            </label>
+            <label class="radio-card">
+              <input type="radio" name="mode" value="det" id="mode-det">
+              <span><strong>Deterministic only</strong><span>Instant, no LLM calls. Findings, decision and staged config.</span></span>
+            </label>
+            <label class="field mt-8"><span class="label">Crew process</span>
+              <select id="process">
+                <option value="sequential">Sequential · reproducible (default)</option>
+                <option value="hierarchical">Hierarchical · architect delegates</option>
+              </select>
+            </label>
+          </fieldset>
+
+          <button class="btn primary block" type="button" id="run-btn">
+            <svg class="icon" viewBox="0 0 24 24" aria-hidden="true"><path d="M7 4.5v15l12-7.5z"/></svg>
+            <span>Execute review</span>
+          </button>
+          <p class="fineprint run-note" id="run-note" aria-live="polite"></p>
+          <p class="fineprint">
+            <svg class="icon" viewBox="0 0 24 24" aria-hidden="true"><rect x="5" y="11" width="14" height="10" rx="2"/><path d="M8 11V7a4 4 0 0 1 8 0v4"/></svg>
+            <span>Read-only. RuleGate never connects to or changes a firewall; staged configuration is text for human review.</span>
+          </p>
         </div>
-
-        <div id="pane-sample" role="tabpanel" aria-labelledby="src-sample">
-          <div class="sample-list" id="sample-list" role="radiogroup" aria-label="Sample change requests"></div>
-          <div class="hint"><span id="sample-hint">Labeled scenarios with expected decisions.</span>
-            <button type="button" class="link-btn" id="edit-sample">Edit as YAML</button></div>
-        </div>
-
-        <div id="pane-yaml" role="tabpanel" aria-labelledby="src-yaml" hidden>
-          <label class="field" for="yaml-input">Change request (YAML)</label>
-          <textarea id="yaml-input" spellcheck="false" autocomplete="off" maxlength="32000"
-            aria-describedby="yaml-hint yaml-errors" placeholder="change_id: CR-3001&#10;target:&#10;  vendor: panos&#10;  device_group: DC-Core&#10;request:&#10;  source_zone: web-dmz&#10;  ..."></textarea>
-          <div class="hint" id="yaml-hint"><span>Validated server-side against the request schema.</span><span id="yaml-count">0 / 32000</span></div>
-          <div class="field-errors" id="yaml-errors" role="alert" hidden></div>
-        </div>
-
-        <div id="pane-text" role="tabpanel" aria-labelledby="src-text" hidden>
-          <label class="field" for="text-input">Request in plain language</label>
-          <textarea id="text-input" class="prose" maxlength="32000" aria-describedby="text-hint text-errors"
-            placeholder="Please allow the web servers (10.20.30.0/27, web-dmz) to reach the payments DB 10.40.10.16 in db-trust on TCP 5432. Ticket CHG0045877."></textarea>
-          <div class="hint" id="text-hint"><span>An intake agent normalizes it and lists every assumption.</span><span id="text-count">0 / 32000</span></div>
-          <label class="field mt-10">Target vendor
-            <select id="vendor-hint">
-              <option value="">Detect from text</option>
-              <option value="panos">Palo Alto PAN-OS</option>
-              <option value="ftd">Cisco FTD (FMC)</option>
-            </select>
-          </label>
-          <div class="field-errors" id="text-errors" role="alert" hidden></div>
-        </div>
-
-        <fieldset class="options">
-          <legend>Analysis mode</legend>
-          <label class="radio-card" id="mode-llm-card">
-            <input type="radio" name="mode" value="llm" id="mode-llm" checked>
-            <span><strong>Agents + deterministic engine</strong><span>Six specialist agents explain, map and plan. Facts still come from Python.</span></span>
-          </label>
-          <label class="radio-card">
-            <input type="radio" name="mode" value="det" id="mode-det">
-            <span><strong>Deterministic only</strong><span>Instant, no LLM calls. Findings, decision and staged config only.</span></span>
-          </label>
-          <label class="field mt-8">Crew process
-            <select id="process">
-              <option value="sequential">Sequential (reproducible, default)</option>
-              <option value="hierarchical">Hierarchical (Lead Security Architect delegates)</option>
-            </select>
-          </label>
-        </fieldset>
-
-        <button class="btn primary block" type="button" id="run-btn">
-          <svg class="icon" viewBox="0 0 24 24" aria-hidden="true"><path d="M7 4.5v15l12-7.5z"/></svg>
-          <span>Run review</span>
-        </button>
-        <p class="fineprint" id="run-note" aria-live="polite"></p>
-        <p class="fineprint">
-          <svg class="icon" viewBox="0 0 24 24" aria-hidden="true"><rect x="5" y="11" width="14" height="10" rx="2"/><path d="M8 11V7a4 4 0 0 1 8 0v4"/></svg>
-          <span>Read-only. RuleGate never connects to or changes a firewall; staged configuration is text for human review.</span>
-        </p>
       </section>
 
       <section class="panel" aria-labelledby="hist-h">
         <div class="panel-head">
-          <h2 id="hist-h">Session history</h2>
-          <button class="btn small ghost" type="button" id="refresh-history" aria-label="Refresh history">Refresh</button>
+          <h2 id="hist-h"><svg class="icon" viewBox="0 0 24 24" aria-hidden="true"><path d="M4 6h16M4 12h16M4 18h10"/></svg>Review queue</h2>
+          <button class="link-btn" type="button" id="refresh-history" aria-label="Refresh review queue">Refresh</button>
         </div>
         <ol class="history" id="history"></ol>
       </section>
     </aside>
 
     <main id="main" tabindex="-1">
-      <!-- Empty state -->
-      <section class="panel hero" id="empty-state" aria-labelledby="hero-h">
-        <h1 id="hero-h">Review a firewall change before it reaches the CAB</h1>
-        <p>Choose a change request and run a review. You will watch each specialist agent work, see every
-          deterministic tool call it relies on, and receive an evidence-backed decision package with staged
-          configuration, test plan and rollback.</p>
-        <div class="how">
-          <div class="card">
-            <h3><svg class="icon" viewBox="0 0 24 24" aria-hidden="true"><rect x="4" y="4" width="16" height="16" rx="2"/><path d="M9 9h6v6H9zM9 1v3M15 1v3M9 20v3M15 20v3M20 9h3M20 14h3M1 9h3M1 14h3"/></svg>Deterministic engine</h3>
-            <p>CIDR and port math, shadow / duplicate / deny-override analysis and the RG-001…RG-016 checks are pure Python. Severity comes from policy, never from an LLM.</p>
+      <!-- Briefing (empty state) -->
+      <section class="panel briefing" id="empty-state" aria-labelledby="hero-h">
+        <div class="panel-head"><h2>System briefing</h2><span class="status-pill status-completed"><span class="dot"></span><span class="txt">Ready</span></span></div>
+        <div class="panel-body">
+          <span class="label accent">Pre-CAB firewall change assurance</span>
+          <h1 id="hero-h">Every change reviewed against the live rulebase before it reaches the CAB.</h1>
+          <p class="lede">Select a change request and execute a review. Each stage is shown as it runs, every fact is traceable to the deterministic engine, and every AI-written statement is labeled and guardrail-checked. Nothing is ever pushed to a firewall.</p>
+          <div class="cap-grid">
+            <div class="cap"><span class="prov det">Deterministic</span><h3>Analysis engine</h3>
+              <p>CIDR and port math, duplicate / shadow / deny-override analysis and RG-001…RG-016 are pure Python. Severity comes from policy, never from a model.</p></div>
+            <div class="cap"><span class="prov ai">AI-generated</span><h3>Specialist agents</h3>
+              <p>Six agents explain, map to compliance and plan the change. They read facts only through tools; a guardrail rejects any unsupported claim.</p></div>
+            <div class="cap"><span class="prov human">Human decision</span><h3>Approval gate</h3>
+              <p>Critical, High or unresolvable results pause for an accountable reviewer to accept, override with justification, or defer.</p></div>
           </div>
-          <div class="card">
-            <h3><svg class="icon" viewBox="0 0 24 24" aria-hidden="true"><circle cx="9" cy="8" r="3.5"/><path d="M2.5 20a6.5 6.5 0 0 1 13 0"/><circle cx="17.5" cy="9" r="2.5"/><path d="M16 14.2a5 5 0 0 1 6 4.8"/></svg>Six specialist agents</h3>
-            <p>Intake, rulebase, risk, compliance, implementation and CAB writing. Agents read facts through tools and a guardrail rejects any unsupported claim.</p>
-          </div>
-          <div class="card">
-            <h3><svg class="icon" viewBox="0 0 24 24" aria-hidden="true"><path d="M12 2.5 4 5.5v6c0 5 3.4 8.7 8 10 4.6-1.3 8-5 8-10v-6z"/><path d="m8.5 12 2.5 2.5 4.5-5"/></svg>Human approval gate</h3>
-            <p>Critical, High, or unresolvable results pause for an accountable reviewer to accept, override with justification, or defer.</p>
+          <div class="legend-box" aria-label="Provenance legend">
+            <span class="label">Provenance legend: shown on every panel and event</span>
+            <div class="legend-row"><span class="prov det">Deterministic <span class="src">· source module</span></span><span>Computed by Python from the request, the rulebase export and risk_policy.yaml. Reproducible: same input, same output.</span></div>
+            <div class="legend-row"><span class="prov ai">AI-generated <span class="src">· agent</span></span><span>Written by an LLM agent. Explains or summarizes deterministic facts; cannot change findings, severity or the decision.</span></div>
+            <div class="legend-row"><span class="prov human">Human decision <span class="src">· reviewer</span></span><span>Recorded by an accountable reviewer at the approval gate, with name, timestamp and justification.</span></div>
+            <div class="legend-row"><span class="prov flow">Orchestration <span class="src">· flow</span></span><span>Pipeline control events: intake, routing, report generation.</span></div>
           </div>
         </div>
       </section>
 
       <!-- Active review -->
-      <section class="panel" id="review-view" hidden aria-labelledby="review-h">
-        <div class="review-head">
-          <div class="review-title">
-            <h1 id="review-h"><span id="rv-id">—</span> <span id="rv-decision"></span></h1>
-            <div class="review-meta" id="rv-meta"></div>
+      <section class="panel" id="review-view" hidden aria-labelledby="rv-id">
+        <div class="review-strip">
+          <div class="rs-cell">
+            <span class="label">Change request</span>
+            <div class="rs-id"><span id="rv-id">—</span><span id="rv-decision"></span></div>
+            <div class="rs-meta" id="rv-meta"></div>
           </div>
-          <div class="review-head-right">
-            <div class="ring" id="rv-ring" role="img" aria-label="Risk score not yet available"></div>
+          <div class="rs-cell" id="rv-risk-cell">
+            <span class="label">Risk score</span>
+            <div class="rs-big" id="rv-score">—</div>
+            <div class="meter" id="rv-meter" role="img" aria-label="Risk score not yet available"></div>
+          </div>
+          <div class="rs-cell">
+            <span class="label">Pipeline status</span>
+            <span class="status-pill" id="rv-status"><span class="dot"></span><span class="txt">—</span></span>
+            <span class="rs-small" id="rv-elapsed"></span>
+          </div>
+          <div class="rs-cell">
+            <span class="label">Approval gate</span>
+            <span class="rs-small" id="rv-gate">—</span>
           </div>
         </div>
       </section>
 
-      <div class="banner warn" id="approval-banner" role="status" hidden>
+      <div class="alert warn" id="approval-banner" role="status" hidden>
         <svg class="icon lg" viewBox="0 0 24 24" aria-hidden="true"><path d="M12 3 2 20h20z"/><path d="M12 10v4M12 17h.01"/></svg>
-        <div class="grow"><strong>Human approval required.</strong><p id="approval-banner-text"></p></div>
+        <div class="grow"><strong>Human decision required</strong><p id="approval-banner-text"></p></div>
         <button class="btn primary" type="button" id="open-approval">Review &amp; decide</button>
       </div>
-      <div class="banner bad" id="error-banner" role="alert" hidden>
+      <div class="alert bad" id="error-banner" role="alert" hidden>
         <svg class="icon lg" viewBox="0 0 24 24" aria-hidden="true"><circle cx="12" cy="12" r="9"/><path d="M12 7v6M12 16h.01"/></svg>
-        <div class="grow"><strong>Review failed.</strong><p id="error-banner-text"></p></div>
+        <div class="grow"><strong>Review failed</strong><p id="error-banner-text"></p></div>
       </div>
 
       <section class="panel" id="pipeline-panel" hidden aria-labelledby="pipe-h">
         <div class="panel-head">
-          <h2 id="pipe-h">Review pipeline</h2>
-          <span class="status-pill" id="rv-status"><span class="dot"></span><span class="txt">—</span></span>
+          <h2 id="pipe-h"><svg class="icon" viewBox="0 0 24 24" aria-hidden="true"><path d="M3 12h4l3-8 4 16 3-8h4"/></svg>Review pipeline</h2>
+          <div class="prov-legend"><span class="prov det">Deterministic</span><span class="prov ai">AI-generated</span><span class="prov human">Human</span></div>
         </div>
         <ol class="pipeline" id="pipeline" aria-label="Review stages"></ol>
       </section>
 
       <section class="panel" id="detail-panel" hidden>
         <div class="tabs" role="tablist" aria-label="Review detail">
-          <button type="button" role="tab" id="tab-btn-activity" aria-controls="tab-activity" aria-selected="true">Live agent activity <span class="count" id="feed-count">0</span></button>
+          <button type="button" role="tab" id="tab-btn-activity" aria-controls="tab-activity" aria-selected="true">Event log <span class="count" id="feed-count">0</span></button>
           <button type="button" role="tab" id="tab-btn-package" aria-controls="tab-package" aria-selected="false" tabindex="-1">Decision package</button>
           <button type="button" role="tab" id="tab-btn-request" aria-controls="tab-request" aria-selected="false" tabindex="-1">Change request</button>
         </div>
 
-        <section id="tab-activity" role="tabpanel" aria-labelledby="tab-btn-activity">
+        <section class="tab-body" id="tab-activity" role="tabpanel" aria-labelledby="tab-btn-activity">
           <div class="feed-tools">
-            <div class="filter-chips" id="feed-filters" role="group" aria-label="Filter activity"></div>
+            <div class="filter-chips" id="feed-filters" role="group" aria-label="Filter events"></div>
             <span class="spacer"></span>
             <span class="chip" id="step-filter-chip" hidden></span>
             <label class="toggle"><input type="checkbox" id="autoscroll" checked> Follow live</label>
           </div>
+          <div class="feed-head" aria-hidden="true">
+            <span class="label">Time (UTC)</span><span class="label">Provenance</span><span class="label">Actor</span><span class="label">Event</span>
+          </div>
           <ol class="feed" id="feed" aria-live="polite" aria-relevant="additions"></ol>
         </section>
 
-        <section id="tab-package" role="tabpanel" aria-labelledby="tab-btn-package" hidden></section>
-        <section id="tab-request" role="tabpanel" aria-labelledby="tab-btn-request" hidden></section>
+        <section class="tab-body" id="tab-package" role="tabpanel" aria-labelledby="tab-btn-package" hidden></section>
+        <section class="tab-body" id="tab-request" role="tabpanel" aria-labelledby="tab-btn-request" hidden></section>
       </section>
     </main>
   </div>
+
+  <div class="banner-strip bottom" id="banner-bottom" role="note" hidden></div>
 
   <dialog id="approval-dialog" aria-labelledby="dlg-h" aria-describedby="dlg-desc">
     <form id="approval-form" method="dialog" novalidate>
       <div class="dlg-head">
         <svg class="icon lg" viewBox="0 0 24 24" aria-hidden="true"><path d="M12 2.5 4 5.5v6c0 5 3.4 8.7 8 10 4.6-1.3 8-5 8-10v-6z"/><path d="M12 8v5M12 16h.01"/></svg>
         <div>
-          <h2 id="dlg-h">Human approval gate</h2>
-          <p id="dlg-desc">Record an accountable decision. It is written into the CAB package next to the deterministic recommendation; it does not alter the computed findings.</p>
+          <h2 id="dlg-h">Human approval gate <span class="prov human">Human decision</span></h2>
+          <p id="dlg-desc">Record an accountable decision. It is written into the CAB package next to the deterministic recommendation and does not alter the computed findings, severity or score.</p>
         </div>
       </div>
       <div class="dlg-body">
         <div class="dlg-summary" id="dlg-summary"></div>
         <div>
-          <h3 class="mb-6">Critical and High findings</h3>
-          <ul class="dlg-findings" id="dlg-findings"></ul>
+          <span class="label">Critical and High findings <span class="prov det">Deterministic</span></span>
+          <ul class="dlg-findings mt-8" id="dlg-findings"></ul>
         </div>
         <fieldset class="choice bare">
-          <legend class="visually-hidden">Reviewer action</legend>
+          <legend class="label mb-6">Reviewer action</legend>
           <label><input type="radio" name="action" value="accept" checked>
             <span><strong>Accept recommendation</strong><span id="dlg-accept-desc">Agree with the deterministic recommendation.</span></span></label>
           <label><input type="radio" name="action" value="override">
@@ -227,10 +251,10 @@
           <label><input type="radio" name="action" value="defer">
             <span><strong>Defer</strong><span>Return without a decision (for example, pending requester clarification).</span></span></label>
         </fieldset>
-        <label class="field">Reviewer name
+        <label class="field"><span class="label">Reviewer name</span>
           <input type="text" id="dlg-reviewer" maxlength="80" autocomplete="name" required>
         </label>
-        <label class="field">Comment / justification
+        <label class="field"><span class="label">Comment / justification</span>
           <textarea id="dlg-comment" class="prose short" maxlength="500"></textarea>
         </label>
         <div class="counter" id="dlg-count">0 / 500</div>
@@ -239,8 +263,11 @@
         <div class="field-errors" id="dlg-errors" role="alert" hidden></div>
       </div>
       <div class="dlg-foot">
-        <button class="btn" type="button" id="dlg-later">Decide later</button>
-        <button class="btn primary" type="submit" id="dlg-submit">Submit decision</button>
+        <span class="label" id="dlg-timeout"></span>
+        <div class="right">
+          <button class="btn" type="button" id="dlg-later">Decide later</button>
+          <button class="btn primary" type="submit" id="dlg-submit">Record decision</button>
+        </div>
       </div>
     </form>
   </dialog>

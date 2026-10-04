@@ -238,3 +238,31 @@ def test_approval_required_emitted_once(client):
     assert [e["kind"] for e in job.events_after(0)].count("approval_required") == 1
     client.post(f"/api/reviews/{job_id}/decision", headers=AUTH, json={"action": "defer", "reviewer": "QA", "attested": True})
     wait_for(client, job_id, {"completed"})
+
+
+@pytest.mark.parametrize("value,expected", [
+    ("INTERNAL USE ONLY · CONFIDENTIAL", "INTERNAL USE ONLY · CONFIDENTIAL"),
+    ("", None),
+    ("<script>alert(1)</script>", None),
+    ("x" * 81, None),
+    ("line one\nline two", None),
+])
+def test_ui_banner_validation(monkeypatch, value, expected):
+    from rulegate.web.app import ui_banner
+
+    monkeypatch.setenv("RULEGATE_UI_BANNER", value)
+    assert ui_banner() == expected
+
+
+def test_config_exposes_banner_and_weights(monkeypatch, tmp_path):
+    monkeypatch.setenv("RULEGATE_UI_BANNER", "INTERNAL USE ONLY")
+    app = create_app(TOKEN, allowed_hosts=["testserver"], manager=JobManager(output_dir=str(tmp_path)), bridge=False)
+    cfg = TestClient(app).get("/api/config", headers=AUTH).json()
+    assert cfg["banner"] == "INTERNAL USE ONLY"
+    assert cfg["severity_weights"]["critical"] == 40 and cfg["severity_weights"]["info"] == 0
+
+
+def test_job_summary_reports_free_text_flag(client):
+    r = client.post("/api/reviews", json={"source": "sample", "sample_id": "cr-1001-panos-web-to-db", "use_llm": False},
+                    headers=AUTH)
+    assert r.json()["free_text"] is False
