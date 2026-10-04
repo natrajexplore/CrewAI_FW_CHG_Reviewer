@@ -1,0 +1,74 @@
+intake_task:
+  description: >
+    Use the cr_schema_validator tool to read change request {change_id}. Summarize the requested access in plain
+    English, list the missing fields and any assumptions made during normalization, and write the clarification
+    questions the requester must answer. Do not invent values for missing fields.
+  expected_output: >
+    An IntakeReview with change_id, summary, missing_fields, assumptions, and clarifications_needed.
+  agent: intake_parser
+
+rulebase_analysis_task:
+  description: >
+    Call shadow_analyzer for change request {change_id}. Use rulebase_lookup to inspect any rule it references.
+    Report, citing rule position and name for each item:
+    duplicate (RG-013), shadowing (RG-014), deny overrides (RG-015), partial overlaps, disabled cleanup
+    candidates, items that need human review (UNRESOLVED objects, user-based rules), and the recommended
+    placement. If the tool reports nothing for a category, say "none".
+  expected_output: >
+    Markdown with exactly these headings: "### Duplicate", "### Shadowing", "### Deny overrides",
+    "### Partial overlaps", "### Needs human review", "### Recommended placement".
+  agent: rulebase_analyst
+  context: [intake_task]
+
+risk_assessment_task:
+  description: >
+    Call risk_scanner for change request {change_id}. For every finding it returns, explain in one or two
+    sentences why it matters for this specific request and what the remediation means in practice. Keep the
+    check_id and severity exactly as returned. Do not add findings. Report the risk score and the decision.
+  expected_output: >
+    A markdown table with columns ID | Severity | Why it matters | Remediation, one row per scanner finding,
+    followed by "Risk score: <n>/100" and "Decision: <DECISION>".
+  agent: risk_assessor
+  context: [intake_task, rulebase_analysis_task]
+
+compliance_task:
+  description: >
+    For each finding in the risk assessment, query compliance_kb with its check ID (and with any sensitive zone
+    named in the request) and map it to the returned clauses. Use only clause references returned by the tool.
+    If no clause matches, use an empty clauses list and say so in the note. List the owners whose sign-off is
+    required, based only on findings that carry compliance references or name a sensitive zone in this request.
+    If no finding requires sign-off, return an empty list.
+  expected_output: >
+    A ComplianceMapping: one mapping per RG check ID with clauses and a note, plus compliance_sign_off_required.
+  agent: compliance_auditor
+  context: [risk_assessment_task]
+
+implementation_task:
+  description: >
+    Call config_renderer for change request {change_id}. Present the staged configuration exactly as rendered,
+    then the test plan and rollback. Add an "Apply conditions" list: findings that must be fixed first, UUID or
+    object placeholders to fill in, and the approvals needed. State clearly that nothing has been applied.
+  expected_output: >
+    Markdown with headings "### Staged configuration (not applied)", "### Test plan", "### Rollback",
+    "### Apply conditions".
+  agent: implementation_planner
+  context: [rulebase_analysis_task, risk_assessment_task, compliance_task]
+
+cab_report_task:
+  description: >
+    Write the analyst narrative for the CAB package of change request {change_id} ({vendor}, {device_group}).
+    The deterministic decision is {decision} with risk score {risk_score}/100. The only check IDs found were:
+    {check_ids}. Start with the exact line "Recommendation: {decision}". Then write: an executive summary
+    (3-5 sentences); "Key findings" referencing every Critical and High check ID with its evidence; "Conditions"
+    (for APPROVE_WITH_CONDITIONS) or "Why rejected" (for REJECT / REJECT_DUPLICATE); and "Suggested narrower
+    alternative" when the request is rejected or over-broad. Cite only check IDs from the list above and rules
+    the rulebase analysis related to this request. Conditions must come from findings, items the rulebase
+    analysis marked as needing human review for this request, or sign-offs tied to a finding; do not add
+    conditions about unrelated rules. For APPROVE with no findings, write "Conditions: standard change process
+    only." Compliance references attached to the findings: {compliance_refs}. List compliance sign-offs only
+    for those references; if they are "none", state that no compliance sign-off is required.
+    Do not repeat the staged config.
+  expected_output: >
+    Markdown narrative beginning with "Recommendation: {decision}", followed by the sections described.
+  agent: cab_report_writer
+  context: [intake_task, rulebase_analysis_task, risk_assessment_task, compliance_task, implementation_task]

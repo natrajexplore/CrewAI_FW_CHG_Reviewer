@@ -1,0 +1,35 @@
+[project]
+name = "rulegate"
+version = "0.1.0"
+description = "RuleGate — CrewAI multi-agent firewall change request reviewer for PAN-OS and Cisco FTD (FMC)"
+readme = "README.md"
+authors = [
+    { name = "Nataraj Angappan", email = "natrajexplore@gmail.com" }
+]
+license = { text = "MIT" }
+requires-python = ">=3.11,<3.14"
+dependencies = [
+    "crewai[anthropic]>=1.15",
+    "pydantic>=2.6",
+    "pyyaml>=6.0",
+    "jinja2>=3.1",
+    "python-dotenv>=1.0",
+]
+
+[project.scripts]
+rulegate = "rulegate.main:main"
+
+[dependency-groups]
+dev = [
+    "pytest>=8.0",
+]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+markers = [
+    "llm: end-to-end tests that call a real LLM (skipped when no API key is set)",
+]
+
+[build-system]
+requires = ["uv_build>=0.12.13,<0.13.0"]
+build-backend = "uv_build"

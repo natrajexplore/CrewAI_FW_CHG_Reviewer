@@ -1,0 +1,70 @@
+# CAB Review — {{ cr.change_id }} ({{ vendor_label }}, {{ cr.target.device_group or "n/a" }})
+
+## Recommendation: {{ risk.decision.value }}
+Risk score: {{ risk.risk_score }} / 100{% if risk.needs_human_review %} · **Needs human review**{% endif %}
+
+{% if gate %}
+**Approval gate:** {{ gate }}
+
+{% endif %}
+## Request summary
+| Field | Value |
+|---|---|
+| Ticket | {{ cr.ticket_ref or "MISSING" }} |
+| Requester | {{ cr.requester or "MISSING" }} |
+| Justification | {{ cr.business_justification or "MISSING" }} |
+| Action | {{ req.action }} |
+| Source | {{ req.source_zone | join(", ") }} / {{ req.source | join(", ") }} |
+| Destination | {{ req.destination_zone | join(", ") }} / {{ req.destination | join(", ") }} |
+| Application | {{ req.application | join(", ") }} |
+| Service | {{ req.service | join(", ") }} |
+| Temporary | {{ cr.temporary }}{% if cr.expiry %} (expires {{ cr.expiry }}){% endif %} |
+{% if cr.assumptions %}
+| Assumptions | {{ cr.assumptions | join("; ") }} |
+{% endif %}
+
+## Findings
+{% if risk.findings %}
+| ID | Severity | Finding | Evidence | Remediation |
+|---|---|---|---|---|
+{% for f in risk.findings %}
+| {{ f.check_id }} | {{ f.severity.value | capitalize }} | {{ f.title }} | {{ f.evidence | map("string") | join("; ") }} | {{ f.remediation or "" }} |
+{% endfor %}
+{% else %}
+No risk checks fired.
+{% endif %}
+
+## Rulebase analysis (duplicate / shadow / conflict)
+- Section: `{{ shadow.section }}`, requested placement `{{ shadow.placement_requested }}`, insertion position {{ shadow.insertion_position }}
+- Duplicate of: {{ shadow.duplicate_of.label() if shadow.duplicate_of else "none" }}
+- Shadowed by: {{ shadow.shadowed_by.label() if shadow.shadowed_by else "none" }}
+- Deny overrides: {{ shadow.deny_overrides | map(attribute="name") | join(", ") or "none" }}
+- Partial overlaps: {% for p in shadow.partial_overlaps %}{{ p.rule.label() }} [{{ p.partial_dimensions | join(", ") }}]{% if not loop.last %}; {% endif %}{% else %}none{% endfor %}
+
+- Disabled cleanup candidates: {{ shadow.disabled_cleanup_candidates | map(attribute="name") | join(", ") or "none" }}
+- Recommended placement: {{ shadow.recommended_placement }}
+
+## Analyst narrative
+{{ narrative }}
+
+## Staged configuration (not applied)
+```
+{{ staged.config }}
+```
+
+## Test plan
+{% for t in staged.test_plan %}
+{{ loop.index }}. {{ t }}
+{% endfor %}
+
+## Rollback
+{% for r in staged.rollback %}
+{{ loop.index }}. {{ r }}
+{% endfor %}
+
+## Items needing human review
+{% for n in risk.review_notes %}
+- {{ n }}
+{% else %}
+- None
+{% endfor %}

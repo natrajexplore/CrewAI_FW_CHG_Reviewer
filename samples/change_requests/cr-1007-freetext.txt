@@ -1,0 +1,2 @@
+Hi team, please allow the web servers (10.20.30.0/27 in web-dmz) to reach the payments DB 10.40.10.16 in db-trust on 5432.
+Needed for the new reconciliation job. Ticket CHG0045877. Requested by app-team-payments. Palo Alto, device group DC-Core.
