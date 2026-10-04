@@ -188,3 +188,10 @@ def test_score_is_capped(policy):
     cr = make_cr("panos", source="any", destination="any", service="any", application="any",
                  security_profile_group=None, logging=False, destination_zone="any")
     assert scan(cr, analyze(cr, []), policy).risk_score == 100
+
+
+@pytest.mark.parametrize("bad", ["../../etc", "CR/1", "CR\1", "..", ".hidden", "", "x" * 65])
+def test_change_id_cannot_escape_report_dir(bad):
+    """Regression: change_id becomes reports/<change_id>/, so path characters must be rejected."""
+    with pytest.raises(ValueError):
+        type(make_cr("panos")).model_validate({**make_cr("panos").model_dump(mode="json"), "change_id": bad})

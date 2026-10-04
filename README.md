@@ -16,7 +16,7 @@ RuleGate **never pushes configuration to a firewall**. It reads the current rule
 6. [Vendor Support Matrix](#vendor-support-matrix)
 7. [Project Structure](#project-structure)
 8. [Quick Start](#quick-start)
-9. [Change Request Format](#change-request-format)
+9. [Review Console (Web UI)](#review-console-web-ui) · [Change Request Format](#change-request-format)
 10. [Sample Output](#sample-output)
 11. [Safety Model](#safety-model)
 12. [Testing and Evaluation](#testing-and-evaluation)
@@ -178,6 +178,10 @@ rulegate/
 │   ├── crew.py                     # @CrewBase crew definition + CAB narrative guardrail
 │   ├── pipeline.py                 # deterministic review context: load, shadow analysis, risk scan
 │   ├── render.py                   # staged config, test plan, rollback (text only)
+│   ├── web/
+│   │   ├── app.py                  # FastAPI review console: auth, validation, security headers
+│   │   ├── jobs.py                 # background reviews, CrewAI event bridge, approval gate
+│   │   └── static/                 # index.html, app.css, app.js (no third-party code)
 │   ├── config/
 │   │   ├── agents.yaml             # role / goal / backstory per agent
 │   │   └── tasks.yaml              # description / expected_output per task
@@ -296,6 +300,46 @@ Reports are written to `reports/<CR-ID>/review.md`, alongside `staged_config.set
 | `--no-llm` | Skip the agent crew; the report contains only deterministic results |
 | `--non-interactive` | Do not prompt at the approval gate; the report is marked `PENDING human approval` |
 | `--output-dir DIR` | Report directory (default `reports`) |
+
+---
+
+## Review Console (Web UI)
+
+A browser console for watching the agents work as a firewall reviewer and for making the human approval decision.
+
+```bash
+uv run rulegate serve              # http://127.0.0.1:8000 — the full link with the access token is printed
+```
+
+Open the printed link (`http://127.0.0.1:8000/#token=…`). What the console offers:
+
+- **Input:** pick a labeled sample, paste or edit YAML, or write a free-text request.
+- **Analysis mode:** *Agents + deterministic engine* or *Deterministic only*. Deterministic only needs no LLM and returns in about a second.
+- **Live pipeline:** Intake, Deterministic analysis, the six agents, Approval gate, Decision package. Each stage shows its live state and tool-call count; click a stage to filter the activity feed to it.
+- **Live agent activity:** every task start and finish, every deterministic tool call with its arguments and output, and every evidence-guardrail pass or rejection, streamed as it happens.
+- **Approval gate:** Critical/High or needs-review results pause the review. The reviewer can accept, override (justification required) or defer, and must confirm they reviewed the evidence. The decision, reviewer name and timestamp are written into the CAB package. Undecided reviews are recorded as deferred after 30 minutes.
+- **Decision package:** recommendation, risk score, findings with evidence and compliance references, rulebase analysis, analyst narrative, staged configuration (copy), test plan, rollback, and downloads (`review.md`, staged config, `findings.json`, print/PDF).
+- Light and dark themes, keyboard navigation, and screen-reader labels.
+
+### Security controls
+
+| Control | Implementation |
+|---|---|
+| Local only by default | Binds `127.0.0.1`; a non-loopback `--host` is refused unless `--allow-remote` is given (put a TLS reverse proxy in front) |
+| Authentication | Random 256-bit token per launch (or `RULEGATE_UI_TOKEN`, minimum 24 characters), required as a Bearer header on every `/api` call and compared in constant time. It is passed in the URL fragment (never sent to the server or logged), kept in `sessionStorage` for that tab only, and removed from the address bar |
+| CSRF / DNS rebinding | Custom `Authorization` header plus no CORS blocks cross-site requests; a `Host` header allowlist blocks DNS rebinding |
+| Browser hardening | `Content-Security-Policy: default-src 'none'; script-src 'self'; style-src 'self'; …; frame-ancestors 'none'` (no inline script or style), `nosniff`, `X-Frame-Options: DENY`, `Referrer-Policy: no-referrer`, COOP/CORP, a restrictive `Permissions-Policy`, and `no-store` on API responses. No server banner; OpenAPI and docs endpoints are disabled |
+| No markup injection | The UI builds every element with DOM APIs and `textContent`; no HTML-parsing sinks, no `eval`, no third-party scripts, styles or fonts (a test enforces this) |
+| Input validation | 64 KB body cap, JSON-only, strict schemas (unknown fields rejected), YAML via `safe_load`, samples from a server-side allowlist (never a client path), error messages never echo submitted values |
+| Staged-config injection | Request fields are restricted to safe character sets. Zones, apps, objects, profile groups, placement references and `ticket_ref` cannot contain spaces, quotes, brackets, semicolons or newlines; free text is flattened to one line. A crafted request cannot smuggle commands into `set` output or the FMC payload |
+| Path traversal | `change_id` is pattern-restricted, and the report path is re-checked to stay inside `reports/` |
+| Resource limits | One review at a time (CrewAI's event bus is process-wide; this also bounds LLM spend), at most 25 jobs kept in memory, and truncated event payloads |
+| Read-only | The backend only runs the review pipeline; no endpoint touches a firewall |
+
+**Known limitations:**
+- Reviewer identity is self-asserted: there is no SSO, and the token is shared. Put the console behind your identity-aware proxy before multi-user use.
+- Jobs live in memory and are lost on restart. The files in `reports/` remain.
+- Free-text requests are sent to the configured LLM. The deterministic decision cannot be changed by prompt injection, but the narrative text comes from the LLM, so treat it as untrusted (it is rendered as plain text).
 
 ---
 

@@ -26,11 +26,11 @@ def make_cr(vendor="panos", **request):
                     intrusion_policy="Balanced Security and Connectivity"),
     }[vendor]
     base.update(request)
-    meta = {k: base.pop(k) for k in ("temporary", "expiry", "ticket_ref", "business_justification") if k in base}
+    meta = {k: base.pop(k) for k in ("temporary", "expiry", "ticket_ref", "business_justification", "requester") if k in base}
     return NormalizedChangeRequest.model_validate({
         "change_id": "CR-TEST",
         "ticket_ref": meta.get("ticket_ref", "CHG0000001"),
-        "requester": "tester",
+        "requester": meta.get("requester", "tester"),
         "business_justification": meta.get("business_justification", "Unit test business justification"),
         "target": {"vendor": vendor, "device_group": "DC-Core" if vendor == "panos" else "DC-Edge-ACP"},
         "request": base,

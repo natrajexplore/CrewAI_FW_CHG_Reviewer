@@ -24,7 +24,15 @@ def main(argv: list[str] | None = None) -> int:
     rv.add_argument("--no-llm", action="store_true", help="Deterministic analysis only; skip the agent crew")
     rv.add_argument("--non-interactive", action="store_true", help="Do not prompt at the human approval gate")
     rv.add_argument("--output-dir", default="reports")
+    sv = sub.add_parser("serve", help="Start the review console (web UI) on localhost")
+    sv.add_argument("--host", default="127.0.0.1", help="Bind address (default 127.0.0.1)")
+    sv.add_argument("--port", type=int, default=8000)
+    sv.add_argument("--allow-remote", action="store_true",
+                    help="Permit a non-loopback bind. Put a TLS reverse proxy in front; traffic is plain HTTP.")
     args = parser.parse_args(argv)
+
+    if args.command == "serve":
+        return serve(args.host, args.port, args.allow_remote)
 
     from rulegate.flow import ReviewFlow  # imported late so --help stays fast
 
@@ -43,6 +51,38 @@ def main(argv: list[str] | None = None) -> int:
     print(f"\n{s.change_id}: {s.decision} (risk {s.risk_score}/100)")
     print(f"Approval gate: {s.gate}")
     print(f"Report: {s.report_dir}")
+    return 0
+
+
+def serve(host: str, port: int, allow_remote: bool) -> int:
+    import ipaddress
+    import os
+    import secrets
+
+    import uvicorn
+
+    from rulegate.web.app import create_app
+
+    try:
+        loopback = host == "localhost" or ipaddress.ip_address(host).is_loopback
+    except ValueError:
+        loopback = False
+    if not loopback and not allow_remote:
+        print(f"Refusing to bind {host}: the console is local-only by default. "
+              "Use --allow-remote behind a TLS reverse proxy if you really need it.", file=sys.stderr)
+        return 2
+    token = os.getenv("RULEGATE_UI_TOKEN") or secrets.token_urlsafe(32)
+    if len(token) < 24:
+        print("RULEGATE_UI_TOKEN must be at least 24 characters.", file=sys.stderr)
+        return 2
+    allowed = ["127.0.0.1", "localhost", "[::1]"] if loopback else [host]
+    app = create_app(token, allowed_hosts=allowed)
+    shown = "127.0.0.1" if loopback else host
+    print("\nRuleGate review console (read-only: nothing is ever pushed to a firewall)")
+    print(f"Open: http://{shown}:{port}/#token={token}")
+    print("The token is read from the URL fragment (never sent to the server in the URL) and kept for this "
+          "browser tab only. Anyone with the token can run reviews and approve them.\n")
+    uvicorn.run(app, host=host, port=port, server_header=False, proxy_headers=False, log_level="info")
     return 0
 
 
